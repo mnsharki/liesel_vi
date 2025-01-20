@@ -44,9 +44,9 @@ class OptimizerBuilder:
         ):
         """
         'transform' can be:
-        - None (meaning no transform),
-        - a Python callable, e.g.:
-            def my_transform(z):
+        - None ,
+        - a Python callable (use of jax highly recommended due to performance), e.g.:
+            def custom_transform(z):
                 z_transformed = jnp.exp(z)
                 logdet = jnp.sum(z)
                 return z_transformed, logdet
@@ -54,17 +54,17 @@ class OptimizerBuilder:
 
         Examples:
         builder.add_latent_variable(
-            names=["theta"],
+            names=["beta"],
             distribution=tfd.Normal(0., 1.),
             transform=None
         )
         builder.add_latent_variable(
-            names=["theta"],
+            names=["beta"],
             distribution=tfd.Normal(0., 1.),
             transform=tfb.Exp()
         )
         builder.add_latent_variable(
-            names=["theta"],
+            names=["beta"],
             distribution=tfd.Normal(0., 1.),
             transform=lambda z: (jnp.exp(z), jnp.sum(z))
         )
