@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional, Union
 from tensorflow_probability.substrates import jax as tfp
+import optax
 from .interface import LieselInterface
 from .optimizer import Optimizer
 
@@ -10,12 +11,13 @@ tfd = tfp.distributions
 
 
 class OptimizerBuilder:
-    def __init__(self, seed: int = 0, n_epochs: int = 10_000, lr: float = 1e-2):
+    def __init__(self, seed: int = 0, n_epochs: int = 10_000): #, lr: float = 1e-2
         self.seed = seed
         self.n_epochs = n_epochs
-        self.lr = lr
+        #self.lr = lr
         self._model_interface: Optional[LieselInterface] = None
         self.latent_variables = []
+        self.optimizer_chain = None
 
     def set_model(self, interface: LieselInterface):
         self._model_interface = interface
@@ -35,12 +37,15 @@ class OptimizerBuilder:
     #     })
     
 
+    def add_optimizer_chain(self, optimizer_chain: optax.GradientTransformation):
+        self.optimizer_chain = optimizer_chain
+
     def add_latent_variable(
         self,
         names: List[str],
         distribution: tfd.Distribution,
-        transform: Optional[Union[Callable, tfb.Bijector]] = None,
-        optimizer: str = "adam"
+        transform: Optional[Union[Callable, tfb.Bijector]] = None#,
+        #optimizer: str = "adam"
         ):
         """
         'transform' can be:
@@ -73,24 +78,25 @@ class OptimizerBuilder:
             "names": names,
             "distribution": distribution,
             "transform": transform,
-            "optimizer": optimizer
+            #"optimizer": optimizer
         })
 
 
-    def set_duration(self, n_epochs: int):
-        self.n_epochs = n_epochs
+    # def set_duration(self, n_epochs: int):
+    #     self.n_epochs = n_epochs
 
     def build(self) -> "Optimizer":
         if self._model_interface is None:
             raise ValueError("Model interface not set. Call builder.set_model(...) first.")
 
-        from .optimizer import Optimizer  
+        # from .optimizer import Optimizer  
         return Optimizer(
             seed=self.seed,
             n_epochs=self.n_epochs,
-            lr=self.lr,
+            #lr=self.lr,
             model_interface=self._model_interface,
-            latent_variables=self.latent_variables
+            latent_variables=self.latent_variables,
+            intermediate_optimizer=self.optimizer_chain
         )
 
 

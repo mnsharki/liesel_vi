@@ -14,20 +14,21 @@ class Optimizer:
         self,
         seed: int,
         n_epochs: int,
-        lr: float,
         model_interface: LieselInterface,
-        latent_variables: List[Dict]
+        latent_variables: List[Dict],
+        intermediate_optimizer: optax.GradientTransformation
     ):
         self.seed = seed
         self.n_epochs = n_epochs
-        self.lr = lr
         self.model_interface = model_interface
         self.latent_vars_config = latent_variables
         self.rng_key = jax.random.PRNGKey(self.seed)
-
+        self.intermediate_optimizer = intermediate_optimizer
         self.variational_dists = self._init_variational_dists()
         self.opt_state, self.optimizer = self._init_optimizer()
         self.elbo_values = []
+        
+
 
     def _init_variational_dists(self):
 
@@ -41,13 +42,12 @@ class Optimizer:
         return variational_dists 
 
     def _init_optimizer(self):
+        
         flat_params, unravel_fn = ravel_pytree(self.variational_dists)
         self._unravel_fn = unravel_fn
-        base_optimizer = optax.chain(
-            optax.clip_by_global_norm(1.0),
-            optax.adam(self.lr)
-        )
+        base_optimizer = self.intermediate_optimizer 
         opt_state = base_optimizer.init(flat_params)
+
         return opt_state, base_optimizer
 
 
@@ -64,7 +64,6 @@ class Optimizer:
             new_flat_params = optax.apply_updates(flat_params, updates)
             return new_flat_params, new_opt_state, loss_val, rng_key
 
-        from jax.flatten_util import ravel_pytree
         flat_params, unravel_fn = ravel_pytree(self.variational_dists)
         opt_state = self.opt_state
         rng_key = self.rng_key
@@ -72,10 +71,9 @@ class Optimizer:
         for epoch in range(self.n_epochs):
             flat_params, opt_state, loss_val, rng_key = step(flat_params, opt_state, rng_key)
             self.elbo_values.append(-loss_val.item())
-            if (epoch + 1) % 1000 == 0:
+            if (epoch + 1) % 10 == 0:
                 print(f"Epoch {epoch+1}, ELBO: {-loss_val:.4f}")
 
-        # Update final states
         self.opt_state = opt_state
         self.rng_key = rng_key
         self.variational_dists = unravel_fn(flat_params)
