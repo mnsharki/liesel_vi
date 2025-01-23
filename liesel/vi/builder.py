@@ -17,7 +17,7 @@ class OptimizerBuilder:
         #self.lr = lr
         self._model_interface: Optional[LieselInterface] = None
         self.latent_variables = []
-        self.optimizer_chain = None
+        #self.optimizer_chain = None
 
     def set_model(self, interface: LieselInterface):
         self._model_interface = interface
@@ -37,15 +37,15 @@ class OptimizerBuilder:
     #     })
     
 
-    def add_optimizer_chain(self, optimizer_chain: optax.GradientTransformation):
-        self.optimizer_chain = optimizer_chain
+    # def add_optimizer_chain(self, optimizer_chain: optax.GradientTransformation):
+    #     self.optimizer_chain = optimizer_chain
 
     def add_latent_variable(
         self,
         names: List[str],
         distribution: tfd.Distribution,
-        transform: Optional[Union[Callable, tfb.Bijector]] = None#,
-        #optimizer: str = "adam"
+        optimizer_chain: optax.GradientTransformation,
+        transform: Optional[Union[Callable, tfb.Bijector]] = None
         ):
         """
         'transform' can be:
@@ -77,8 +77,8 @@ class OptimizerBuilder:
         self.latent_variables.append({
             "names": names,
             "distribution": distribution,
-            "transform": transform,
-            #"optimizer": optimizer
+            "optimizer_chain": optimizer_chain,
+            "transform": transform
         })
 
 
@@ -93,10 +93,8 @@ class OptimizerBuilder:
         return Optimizer(
             seed=self.seed,
             n_epochs=self.n_epochs,
-            #lr=self.lr,
             model_interface=self._model_interface,
-            latent_variables=self.latent_variables,
-            intermediate_optimizer=self.optimizer_chain
+            latent_variables=self.latent_variables
         )
 
 
