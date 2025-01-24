@@ -9,7 +9,6 @@ import jax.tree_util
 from .interface import LieselInterface
 tfd = tfp.distributions
 
-
 class Optimizer:
     def __init__(
         self,
@@ -25,7 +24,8 @@ class Optimizer:
         self.rng_key = jax.random.PRNGKey(self.seed)
 
         self.variational_dists = self._init_variational_dists()
-        self.flat_params, self._unravel_fn = ravel_pytree(self.variational_dists)
+        self.initial_distributions = self.variational_dists 
+
 
         self.opt_state, self.optimizer = self._init_optimizer()
         self.elbo_values = []
@@ -33,7 +33,6 @@ class Optimizer:
 
 
     def _init_variational_dists(self):
-
 
         variational_dists = {
             pname: config["distribution"]
@@ -44,74 +43,68 @@ class Optimizer:
         return variational_dists 
     
     def _init_transform_dict(self):
+
         optim_dict = {
                     pname: config["optimizer_chain"]
                     for config in self.latent_vars_config
                     for pname in config["names"]
                 }
+        
         return optim_dict
 
 
     def _init_optimizer(self):
-        
-        def label_fn(param_tree):
-            return {k: k for k in param_tree}
-        
-        param_tree = self._unravel_fn(self.flat_params)
-        #flat_params = self.variational_dists #, unravel_fn = ravel_pytree(self.variational_dists)
-        #self._unravel_fn = unravel_fn
 
-        #base_optimizer = self.intermediate_optimizer 
+        def label_fn(d):
+            return {k: k for k in d}
+        
+        distribution_dict = self.variational_dists
 
         optim_dict = self._init_transform_dict()
-        tx = optax.multi_transform(optim_dict, label_fn) #hier nicht flat params sondern dictionar mit optimizers
+        tx = optax.multi_transform(optim_dict, label_fn) 
+        opt_state = tx.init(distribution_dict)
 
-        #opt_state = base_optimizer.init(flat_params)
-        opt_state = tx.init(param_tree)
-        return opt_state, tx #base_optimizer
-
+        return opt_state, tx 
 
 
     def fit(self):
         @jax.jit
-        def step(flat_params, opt_state, rng_key):
-            param_tree = self._unravel_fn(flat_params)
+        def step(current_variational, opt_state, rng_key):
+    
             (loss_val, rng_key), grads = jax.value_and_grad(
                 lambda p, key: self._elbo(p, key),
                 has_aux=True
-            )(param_tree, rng_key)
+            )(current_variational, rng_key)
 
-            updates, new_opt_state = self.optimizer.update(grads, opt_state, param_tree)
-            new_param_tree = optax.apply_updates(param_tree, updates)
-            new_flat_params, _ = ravel_pytree(new_param_tree)
-            return new_flat_params, new_opt_state, loss_val, rng_key
+            updates, new_opt_state = self.optimizer.update(grads, opt_state, current_variational)
+            new_variational = optax.apply_updates(current_variational, updates)
+ 
+            return new_variational, new_opt_state, loss_val, rng_key
 
-        flat_params = self.flat_params #flat_params, unravel_fn = ravel_pytree(self.variational_dists)
+        variational_dists = self.variational_dists 
         opt_state = self.opt_state
         rng_key = self.rng_key
 
         for epoch in range(self.n_epochs):
-            flat_params, opt_state, loss_val, rng_key = step(flat_params, opt_state, rng_key)
-            self.elbo_values.append(-loss_val.item())
+            variational_dists, opt_state, loss_val, rng_key = step(variational_dists, opt_state, rng_key)
+            self.elbo_values.append(float(-loss_val))
             if (epoch + 1) % 1000 == 0:
                 print(f"Epoch {epoch+1}, ELBO: {-loss_val:.4f}")
 
+        self.variational_dists = variational_dists
         self.opt_state = opt_state
         self.rng_key = rng_key
-        self.flat_params = flat_params  #self.variational_dists = unravel_fn(flat_params)
+          
 
 
-    def _elbo(self, param_tree, rng_key): #flat_params
-
-        variational_dists = param_tree #flat_params #variational_dists = self._unravel_fn(flat_params) 
-        
+    def _elbo(self, variational_dists, rng_key): 
 
         num_samples = 32
 
         rng_keys = jax.random.split(rng_key, num_samples)
 
         def single_sample_elbo(rng_key):
-            samples, log_det_jac, _ = self._sample_variational(variational_dists, rng_key)  #variational_params
+            samples, log_det_jac, _ = self._sample_variational(variational_dists, rng_key)  
             log_likelihood = self.model_interface.compute_log_likelihood(samples) + log_det_jac
             log_prior = self.model_interface.compute_log_prior(samples)
             return log_likelihood + log_prior 
@@ -120,16 +113,12 @@ class Optimizer:
 
         elbo = jnp.mean(elbo_samples)
             
-        #Apparently one time calculation of entropy is enough, bc deterministic
+        
         entropy = self._compute_entropy(variational_dists) 
         elbo += entropy
 
         return -elbo, rng_key
     
-
-#Considerations: Bijectors of add_latent_variable only affect the samples and their domain 
-#The parameters of distribution need to be of a specific domain 
-#However, the log_det_jac is calculated in the transformed space, so the bijector should be applied to the log_det_jac a well
     def _sample_variational(self, variational_dists, rng_key):
         samples = {}
         log_det_jac = 0.0
@@ -175,17 +164,3 @@ class Optimizer:
             total_entropy += jnp.sum(dist.entropy())
 
         return total_entropy
-
-
-
-def _tfp_dist_flatten_fn(dist_obj):
-    return (), None
-
-def _tfp_dist_unflatten_fn(aux, children):
-    return aux  
-
-jax.tree_util.register_pytree_node(
-    tfp.distributions.Distribution,
-    _tfp_dist_flatten_fn,
-    _tfp_dist_unflatten_fn
-)
