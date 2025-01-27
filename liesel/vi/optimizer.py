@@ -5,6 +5,7 @@ from typing import Dict, List
 from tensorflow_probability.substrates import jax as tfp
 from jax.flatten_util import ravel_pytree
 import jax.tree_util 
+from tqdm import tqdm
 
 from .interface import LieselInterface
 tfd = tfp.distributions
@@ -25,6 +26,7 @@ class Optimizer:
 
         self.variational_dists = self._init_variational_dists()
         self.initial_distributions = self.variational_dists 
+
 
 
         self.opt_state, self.optimizer = self._init_optimizer()
@@ -66,8 +68,9 @@ class Optimizer:
 
         return opt_state, tx 
 
-
+  
     def fit(self):
+        
         @jax.jit
         def step(current_variational, opt_state, rng_key):
     
@@ -96,20 +99,26 @@ class Optimizer:
         self.rng_key = rng_key
           
 
-
     def _elbo(self, variational_dists, rng_key): 
 
         num_samples = 32
 
         rng_keys = jax.random.split(rng_key, num_samples)
 
-        def single_sample_elbo(rng_key):
+        # @jax.jit
+        # def _single_sample_elbo(rng_key):
+        #     samples, log_det_jac, _ = self._sample_variational(variational_dists, rng_key)  
+        #     log_likelihood = self.model_interface.compute_log_likelihood(samples) + log_det_jac
+        #     log_prior = self.model_interface.compute_log_prior(samples)
+        #     return log_likelihood + log_prior
+        
+        @jax.jit
+        def _single_sample_elbo(rng_key):
             samples, log_det_jac, _ = self._sample_variational(variational_dists, rng_key)  
-            log_likelihood = self.model_interface.compute_log_likelihood(samples) + log_det_jac
-            log_prior = self.model_interface.compute_log_prior(samples)
-            return log_likelihood + log_prior 
+            log_prob = self.model_interface.compute_log_prob(samples) + log_det_jac
+            return log_prob 
 
-        elbo_samples = jax.vmap(single_sample_elbo)(rng_keys)
+        elbo_samples = jax.vmap(_single_sample_elbo)(rng_keys)
 
         elbo = jnp.mean(elbo_samples)
             
@@ -158,9 +167,11 @@ class Optimizer:
 
         return samples, log_det_jac, rng_key
 
+
     def _compute_entropy(self, variational_dists):
         total_entropy = 0.0
         for dist in variational_dists.values():
             total_entropy += jnp.sum(dist.entropy())
 
         return total_entropy
+

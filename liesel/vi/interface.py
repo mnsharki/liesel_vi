@@ -24,3 +24,7 @@ class LieselInterface:
     def compute_log_prior(self, samples: Dict[str, jnp.ndarray]) -> float:
         self.set_params(samples)
         return self.model.log_prior
+
+    def compute_log_prob(self, samples: Dict[str, jnp.ndarray]) -> float:
+        self.set_params(samples)
+        return self.model.log_prob

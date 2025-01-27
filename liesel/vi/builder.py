@@ -7,7 +7,13 @@ from .optimizer import Optimizer
 from typing import Callable
 import tensorflow_probability.substrates.jax.bijectors as tfb
 
-tfd = tfp.distributions
+import tensorflow_probability.substrates.jax.distributions as tfd
+from liesel.distributions import MultivariateNormalLogCholeskyParametrization
+
+
+
+
+#tfd = tfp.distributions
 
 
 class OptimizerBuilder:
