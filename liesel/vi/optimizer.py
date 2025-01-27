@@ -27,8 +27,6 @@ class Optimizer:
         self.variational_dists = self._init_variational_dists()
         self.initial_distributions = self.variational_dists 
 
-
-
         self.opt_state, self.optimizer = self._init_optimizer()
         self.elbo_values = []
         
@@ -98,7 +96,7 @@ class Optimizer:
         self.opt_state = opt_state
         self.rng_key = rng_key
           
-
+    #@jax.jit
     def _elbo(self, variational_dists, rng_key): 
 
         num_samples = 32
@@ -112,25 +110,39 @@ class Optimizer:
         #     log_prior = self.model_interface.compute_log_prior(samples)
         #     return log_likelihood + log_prior
         
+        # @jax.jit
+        # def _single_sample_elbo(rng_key):
+        #     samples, log_det_jac, _ = self._sample_variational(variational_dists, rng_key)  
+        #     log_prob = self.model_interface.compute_log_prob(samples) + log_det_jac
+        #     return log_prob 
+        
+
         @jax.jit
         def _single_sample_elbo(rng_key):
-            samples, log_det_jac, _ = self._sample_variational(variational_dists, rng_key)  
+            samples, log_det_jac, log_q_z, _ = self._sample_variational(variational_dists, rng_key)  
             log_prob = self.model_interface.compute_log_prob(samples) + log_det_jac
-            return log_prob 
+            return log_prob - log_q_z  
+
+        elbo_samples = jax.vmap(_single_sample_elbo)(rng_keys)
+        elbo = jnp.mean(elbo_samples)
+
 
         elbo_samples = jax.vmap(_single_sample_elbo)(rng_keys)
 
         elbo = jnp.mean(elbo_samples)
             
         
-        entropy = self._compute_entropy(variational_dists) 
-        elbo += entropy
+        #entropy = self._compute_entropy(variational_dists) 
+        #elbo += entropy
 
         return -elbo, rng_key
     
+    #@jax.jit
     def _sample_variational(self, variational_dists, rng_key):
         samples = {}
         log_det_jac = 0.0
+
+        log_q_z = 0.0
 
         name_to_transform = {}
         for config in self.latent_vars_config:
@@ -142,6 +154,8 @@ class Optimizer:
             if dist_obj.reparameterization_type == tfd.FULLY_REPARAMETERIZED:
                 rng_key, subkey = jax.random.split(rng_key)
                 z = dist_obj.sample(seed=subkey)
+
+                log_q_z += dist_obj.log_prob(z)
             
             else: 
                 NotImplementedError("Only fully reparameterized distributions are supported so far.")
@@ -165,7 +179,7 @@ class Optimizer:
             log_det_jac += ldj
             samples[pname] = z_transformed
 
-        return samples, log_det_jac, rng_key
+        return samples, log_det_jac, log_q_z, rng_key
 
 
     def _compute_entropy(self, variational_dists):
@@ -174,4 +188,3 @@ class Optimizer:
             total_entropy += jnp.sum(dist.entropy())
 
         return total_entropy
-
