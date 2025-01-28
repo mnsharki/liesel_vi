@@ -5,7 +5,6 @@ from typing import Dict, List
 from tensorflow_probability.substrates import jax as tfp
 from jax.flatten_util import ravel_pytree
 import jax.tree_util 
-from tqdm import tqdm
 
 from .interface import LieselInterface
 tfd = tfp.distributions
@@ -55,8 +54,12 @@ class Optimizer:
 
     def _init_optimizer(self):
 
-        def label_fn(d):
-            return {k: k for k in d}
+        # def label_fn(d):
+        #     return {k: k for k in d}
+
+        def label_fn(d): #updated label fn for consistency 
+            return {k: k for k in d if k in self.variational_dists}
+
         
         distribution_dict = self.variational_dists
 
@@ -119,21 +122,12 @@ class Optimizer:
 
         @jax.jit
         def _single_sample_elbo(rng_key):
-            samples, log_det_jac, log_q_z, _ = self._sample_variational(variational_dists, rng_key)  
+            samples, log_det_jac, log_q, _ = self._sample_variational(variational_dists, rng_key)  
             log_prob = self.model_interface.compute_log_prob(samples) + log_det_jac
-            return log_prob - log_q_z  
+            return log_prob - log_q
 
         elbo_samples = jax.vmap(_single_sample_elbo)(rng_keys)
         elbo = jnp.mean(elbo_samples)
-
-
-        elbo_samples = jax.vmap(_single_sample_elbo)(rng_keys)
-
-        elbo = jnp.mean(elbo_samples)
-            
-        
-        #entropy = self._compute_entropy(variational_dists) 
-        #elbo += entropy
 
         return -elbo, rng_key
     
@@ -149,6 +143,7 @@ class Optimizer:
             transform = config.get("transform", None)
             for pname in config["names"]:
                 name_to_transform[pname] = transform
+                
 
         for pname, dist_obj in variational_dists.items():
             if dist_obj.reparameterization_type == tfd.FULLY_REPARAMETERIZED:
@@ -179,12 +174,6 @@ class Optimizer:
             log_det_jac += ldj
             samples[pname] = z_transformed
 
+
         return samples, log_det_jac, log_q_z, rng_key
 
-
-    def _compute_entropy(self, variational_dists):
-        total_entropy = 0.0
-        for dist in variational_dists.values():
-            total_entropy += jnp.sum(dist.entropy())
-
-        return total_entropy
