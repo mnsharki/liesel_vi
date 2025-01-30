@@ -7,25 +7,26 @@ from .optimizer import Optimizer
 from typing import Callable
 import tensorflow_probability.substrates.jax.bijectors as tfb
 
-tfd = tfp.distributions
+import tensorflow_probability.substrates.jax.distributions as tfd
+from liesel.distributions import MultivariateNormalLogCholeskyParametrization
+
+
+
+
+#tfd = tfp.distributions
 
 
 class OptimizerBuilder:
     def __init__(self, seed: int = 0, n_epochs: int = 10_000): #, lr: float = 1e-2
         self.seed = seed
         self.n_epochs = n_epochs
-        #self.batch_size = batch_size
         #self.lr = lr
         self._model_interface: Optional[LieselInterface] = None
         self.latent_variables = []
         #self.optimizer_chain = None
 
-
     def set_model(self, interface: LieselInterface):
         self._model_interface = interface
-
-    def set_batch_size(self, batch_size):
-        self.batch_size = batch_size
 
     # def add_latent_variable(
     #     self,
@@ -94,30 +95,10 @@ class OptimizerBuilder:
         if self._model_interface is None:
             raise ValueError("Model interface not set. Call builder.set_model(...) first.")
 
+        # from .optimizer import Optimizer  
         return Optimizer(
             seed=self.seed,
             n_epochs=self.n_epochs,
             model_interface=self._model_interface,
-            latent_variables=self.latent_variables,
-            batch_size=self.batch_size 
+            latent_variables=self.latent_variables
         )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
