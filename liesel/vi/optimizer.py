@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 import optax
-from typing import Dict, List
+from typing import Dict, List, Optional
 from tensorflow_probability.substrates import jax as tfp
 from jax.flatten_util import ravel_pytree
 import jax.tree_util 
@@ -16,6 +16,7 @@ class Optimizer:
         n_epochs: int,
         model_interface: LieselInterface,
         latent_variables: List[Dict],
+        batch_size: Optional[int] = None,
     ):
         self.seed = seed
         self.n_epochs = n_epochs
@@ -28,7 +29,7 @@ class Optimizer:
 
         self.opt_state, self.optimizer = self._init_optimizer()
         self.elbo_values = []
-        
+        self.batch_size = batch_size
 
 
     def _init_variational_dists(self):
@@ -70,11 +71,45 @@ class Optimizer:
         return opt_state, tx 
 
   
-    def fit(self):
+    # def fit(self):
         
-        @jax.jit
-        def step(current_variational, opt_state, rng_key):
+    #     @jax.jit
+    #     def step(current_variational, opt_state, rng_key):
     
+    #         (loss_val, rng_key), grads = jax.value_and_grad(
+    #             lambda p, key: self._elbo(p, key),
+    #             has_aux=True
+    #         )(current_variational, rng_key)
+
+    #         updates, new_opt_state = self.optimizer.update(grads, opt_state, current_variational)
+    #         new_variational = optax.apply_updates(current_variational, updates)
+ 
+    #         return new_variational, new_opt_state, loss_val, rng_key
+
+    #     variational_dists = self.variational_dists 
+    #     opt_state = self.opt_state
+    #     rng_key = self.rng_key
+
+    #     for epoch in range(self.n_epochs):
+    #         variational_dists, opt_state, loss_val, rng_key = step(variational_dists, opt_state, rng_key)
+    #         self.elbo_values.append(float(-loss_val))
+    #         if (epoch + 1) % 1000 == 0:
+    #             print(f"Epoch {epoch+1}, ELBO: {-loss_val:.4f}")
+
+    #     self.variational_dists = variational_dists
+    #     self.opt_state = opt_state
+    #     self.rng_key = rng_key
+
+
+    def fit(self):
+        @jax.jit
+        def step(current_variational, opt_state, rng_key, batch_indices):
+            if self.batch_size is not None:
+
+                self.model_interface.model.auto_update = False
+                self.model_interface.subset_obs(batch_indices)
+                self.model_interface.model.auto_update = True
+
             (loss_val, rng_key), grads = jax.value_and_grad(
                 lambda p, key: self._elbo(p, key),
                 has_aux=True
@@ -82,22 +117,41 @@ class Optimizer:
 
             updates, new_opt_state = self.optimizer.update(grads, opt_state, current_variational)
             new_variational = optax.apply_updates(current_variational, updates)
- 
-            return new_variational, new_opt_state, loss_val, rng_key
 
+            return new_variational, new_opt_state, loss_val, rng_key
+        
         variational_dists = self.variational_dists 
         opt_state = self.opt_state
         rng_key = self.rng_key
 
+        total_observations = next(iter(self.model_interface.model.vars.values())).value.shape[0]
+        batch_size = self.batch_size
+        num_batches = (total_observations + batch_size - 1) // batch_size if batch_size else 1
+
+
         for epoch in range(self.n_epochs):
-            variational_dists, opt_state, loss_val, rng_key = step(variational_dists, opt_state, rng_key)
+            if batch_size:
+                rng_key, subkey = jax.random.split(rng_key)
+                indices = jax.random.permutation(subkey, total_observations)
+                batches = indices.reshape((num_batches, batch_size))[:num_batches]
+            else:
+                batches = [jnp.arange(total_observations)]
+
+            variational_dists, opt_state, loss_val, rng_key = step(variational_dists, opt_state, rng_key, batches)
             self.elbo_values.append(float(-loss_val))
             if (epoch + 1) % 1000 == 0:
                 print(f"Epoch {epoch+1}, ELBO: {-loss_val:.4f}")
 
+
+        self.model_interface.model.auto_update = False
+        self.model_interface.reset_obs()
+        self.model_interface.model.auto_update = True
+
+
         self.variational_dists = variational_dists
         self.opt_state = opt_state
         self.rng_key = rng_key
+
           
     #@jax.jit
     def _elbo(self, variational_dists, rng_key): 
