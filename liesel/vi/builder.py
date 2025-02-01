@@ -1,58 +1,37 @@
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Callable
 from tensorflow_probability.substrates import jax as tfp
 import optax
+
+import tensorflow_probability.substrates.jax.bijectors as tfb
+import tensorflow_probability.substrates.jax.distributions as tfd
+
 from .interface import LieselInterface
 from .optimizer import Optimizer
-
-from typing import Callable
-import tensorflow_probability.substrates.jax.bijectors as tfb
-
-import tensorflow_probability.substrates.jax.distributions as tfd
 from liesel.distributions import MultivariateNormalLogCholeskyParametrization
 
 
 
-
-#tfd = tfp.distributions
-
-
 class OptimizerBuilder:
-    def __init__(self, seed: int = 0, n_epochs: int = 10_000): #, lr: float = 1e-2
+    def __init__(self, seed: int = 0, n_epochs: int = 10_000):
         self.seed = seed
         self.n_epochs = n_epochs
-        #self.lr = lr
         self._model_interface: Optional[LieselInterface] = None
         self.latent_variables = []
-        #self.optimizer_chain = None
 
     def set_model(self, interface: LieselInterface):
         self._model_interface = interface
 
-    # def add_latent_variable(
-    #     self,
-    #     names: List[str],
-    #     distribution: tfd.Distribution,
-    #     transform: Optional[Union[str, Dict]] = None,
-    #     optimizer: str = "adam"
-    # ):
-    #     self.latent_variables.append({
-    #         "names": names,
-    #         "distribution": distribution,
-    #         "transform": transform,
-    #         "optimizer": optimizer
-    #     })
-    
-
-    # def add_optimizer_chain(self, optimizer_chain: optax.GradientTransformation):
-    #     self.optimizer_chain = optimizer_chain
-
     def add_latent_variable(
         self,
         names: List[str],
-        distribution: tfd.Distribution,
+        dist_class: Callable,  
+        *, # enforce keyword-only arguments, leaves us flexibility to not specify arguments for fixed_distribution_params, but leaves it together
+        phi: Dict[str, float],
+        fixed_distribution_params: Optional[Dict[str, float]] = None,
         optimizer_chain: optax.GradientTransformation,
         transform: Optional[Union[Callable, tfb.Bijector]] = None
         ):
+        #NEED TO ADJUST 
         """
         'transform' can be:
         - None ,
@@ -80,22 +59,22 @@ class OptimizerBuilder:
             transform=lambda z: (jnp.exp(z), jnp.sum(z))
         )
         """
-        self.latent_variables.append({
-            "names": names,
-            "distribution": distribution,
-            "optimizer_chain": optimizer_chain,
-            "transform": transform
-        })
+        self.latent_variables.append(
+            {
+                "names": names,
+                "dist_class": dist_class,
+                "phi": phi,   
+                "fixed_distribution_params": fixed_distribution_params,
+                "optimizer_chain": optimizer_chain,
+                "transform": transform,
+            }
+        )
 
-
-    # def set_duration(self, n_epochs: int):
-    #     self.n_epochs = n_epochs
 
     def build(self) -> "Optimizer":
         if self._model_interface is None:
             raise ValueError("Model interface not set. Call builder.set_model(...) first.")
-
-        # from .optimizer import Optimizer  
+  
         return Optimizer(
             seed=self.seed,
             n_epochs=self.n_epochs,

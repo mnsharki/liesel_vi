@@ -1,29 +1,37 @@
-import jax.numpy as jnp
 from typing import Dict
+import copy
 
+import jax.numpy as jnp
 
 class LieselInterface:
     def __init__(self, model):
         self.model = model
+        #self.model.auto_update = False #for minibatching later
+
 
     def get_params(self) -> Dict[str, jnp.ndarray]:
         params = {}
-        for param in self.model.vars.values():
-            params[param.name] = jnp.asarray(param.value)
+        for pname, var in self.model.vars.items():
+            params[pname] = var.value
         return params
 
+
+    #probably not necessay anymore 
     def set_params(self, param_values: Dict[str, jnp.ndarray]):
         for pname, val in param_values.items():
             self.model.vars[pname].value = val
 
-    # def compute_log_likelihood(self, samples: Dict[str, jnp.ndarray]) -> float:
-    #     self.set_params(samples)
-    #     return self.model.log_lik
 
-    # def compute_log_prior(self, samples: Dict[str, jnp.ndarray]) -> float:
-    #     self.set_params(samples)
-    #     return self.model.log_prior
+    def compute_log_prob(self, param_values: Dict[str, jnp.ndarray]) -> float:
 
-    def compute_log_prob(self, samples: Dict[str, jnp.ndarray]) -> float:
-        self.set_params(samples)
-        return self.model.log_prob
+        model_copy = copy.deepcopy(self.model)
+        
+        for pname, value in param_values.items():
+            if pname in model_copy.vars:
+                model_copy.vars[pname].value = value
+            else:
+                raise KeyError(f"Parameter {pname} not part of the modell.")
+        
+        model_copy.update()
+        
+        return model_copy.log_prob
