@@ -17,9 +17,13 @@ class Optimizer:
         n_epochs: int,
         model_interface: LieselInterface,
         latent_variables: List[Dict],
+        patience_tol: Optional[float] = None, 
+        window_size: Optional[int] = None,
     ):
         self.seed = seed
         self.n_epochs = n_epochs
+        self.patience_tol = patience_tol  
+        self.window_size = window_size
         self.model_interface = model_interface
         self.latent_vars_config = latent_variables
         self.rng_key = jax.random.PRNGKey(self.seed)
@@ -168,11 +172,29 @@ class Optimizer:
         opt_state = self.opt_state
         rng_key = self.rng_key
 
+
+        best_elbo = -float("inf")
+        window_counter = 0
+
         for epoch in range(self.n_epochs):
             phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key)
-            self.elbo_values.append(float(-loss_val))
+            
+            current_elbo = -loss_val
+            self.elbo_values.append(float(current_elbo))
+
             if (epoch + 1) % 1000 == 0:
-                print(f"Epoch {epoch+1}, ELBO: {-loss_val:.4f}")
+                print(f"Epoch {epoch+1}, ELBO: {current_elbo:.4f}")
+
+            if current_elbo > best_elbo + self.patience_tol:
+                best_elbo = current_elbo
+                window_counter = 0
+            else:
+                window_counter += 1
+
+            if window_counter >= self.window_size:
+                print(f"Early stopping at epoch {epoch+1}")
+                break
+
 
         self.phi = phi
         self.opt_state = opt_state
