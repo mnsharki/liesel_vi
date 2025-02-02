@@ -1,9 +1,7 @@
 from typing import Dict, List, Optional, Union, Callable
-from tensorflow_probability.substrates import jax as tfp
-import optax
 
 import tensorflow_probability.substrates.jax.bijectors as tfb
-import tensorflow_probability.substrates.jax.distributions as tfd
+import optax
 
 from .interface import LieselInterface
 from .optimizer import Optimizer
@@ -81,3 +79,4 @@ class OptimizerBuilder:
             model_interface=self._model_interface,
             latent_variables=self.latent_variables
         )
+
