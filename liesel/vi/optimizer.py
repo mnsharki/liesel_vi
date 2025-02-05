@@ -54,11 +54,6 @@ class Optimizer:
             raise ValueError("No observed data found in model.")
 
 
-
-
-
-
-
     def _init_variational_dists_class(self):
 
         variational_dists_class = { 
@@ -170,16 +165,15 @@ class Optimizer:
 
         return opt_state, tx
 
+
     def fit(self):
 
-        @partial(jax.jit, static_argnames=['batch_size']) #@jax.jit
+        @partial(jax.jit, static_argnames=['batch_size'])
         def step(current_phi, opt_state, rng_key, batch_size): #new
-
             (loss_val, rng_key), grads = jax.value_and_grad(
-                lambda p, key: self._elbo(p, key, batch_size), #new
+                lambda p, key: self._elbo(p, key, batch_size), #new 
                 has_aux=True
             )(current_phi, rng_key)
-        
 
             updates, new_opt_state = self.optimizer.update(grads, opt_state, current_phi)
             new_phis = optax.apply_updates(current_phi, updates)
@@ -189,41 +183,19 @@ class Optimizer:
         opt_state = self.opt_state
         rng_key = self.rng_key
 
-
         best_elbo = -float("inf")
         window_counter = 0
-        if self.batch_size is None:
-        
-            for epoch in range(self.n_epochs):
-                bs=self.batch_size
-                phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key, bs)
-                
-                current_elbo = -loss_val
-                self.elbo_values.append(float(current_elbo))
+        early_stopping_enabled = (self.patience_tol is not None and self.window_size is not None)
 
-                if (epoch + 1) % 1000 == 0: #Definition of early stopping in own class? 
-                    print(f"Epoch {epoch+1}, ELBO: {current_elbo:.4f}")
+        for epoch in range(self.n_epochs):
+            phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key, self.batch_size)
+            current_elbo = -loss_val
+            self.elbo_values.append(float(current_elbo))
 
-                if current_elbo > best_elbo + self.patience_tol:
-                    best_elbo = current_elbo
-                    window_counter = 0
-                else:
-                    window_counter += 1
+            if (epoch + 1) % 1000 == 0:
+                print(f"Epoch {epoch+1}, ELBO: {current_elbo:.4f}")
 
-                if window_counter >= self.window_size:
-                    print(f"Early stopping at epoch {epoch+1}")
-                    break
-
-        else:
-
-            for epoch in range(self.n_epochs):
-                phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key, self.batch_size)
-                
-                current_elbo = -loss_val
-                self.elbo_values.append(float(current_elbo))
-
-                if (epoch + 1) % 1000 == 0: #Definition of early stopping in own class? 
-                    print(f"Epoch {epoch+1}, ELBO: {current_elbo:.4f}")
+            if early_stopping_enabled: #Definition of early stopping in own class?
 
                 if current_elbo > best_elbo + self.patience_tol:
                     best_elbo = current_elbo
@@ -232,7 +204,7 @@ class Optimizer:
                     window_counter += 1
 
                 if window_counter >= self.window_size:
-                    print(f"Early stopping at epoch {epoch+1}")
+                    print(f"Early stopping at epoch {epoch+1} with ELBO {current_elbo:.4f}")
                     break
 
         self.phi = phi
