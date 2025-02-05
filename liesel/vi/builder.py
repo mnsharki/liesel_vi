@@ -10,12 +10,19 @@ from liesel.distributions import MultivariateNormalLogCholeskyParametrization
 
 
 class OptimizerBuilder:
-    def __init__(self, seed: int = 0, n_epochs: int = 10_000, patience_tol: Optional[float] = None, window_size: Optional[int] = None):
+    def __init__(
+            self, seed: int = 0, 
+            n_epochs: int = 10_000, 
+            patience_tol: Optional[float] = None, 
+            window_size: Optional[int] = None,
+            batch_size: Optional[int] = None
+            ):
         self.seed = seed
         self.n_epochs = n_epochs
         self.patience_tol = patience_tol 
         self.window_size = window_size
-        self._model_interface: Optional[LieselInterface] = None
+        self.batch_size = batch_size
+        self._model_interface = None
         self.latent_variables = []
 
     def set_model(self, interface: LieselInterface):
@@ -78,8 +85,9 @@ class OptimizerBuilder:
         return Optimizer(
             seed=self.seed,
             n_epochs=self.n_epochs,
-            patience_tol = self.patience_tol,
-            window_size = self.window_size,
+            patience_tol=self.patience_tol,
+            window_size=self.window_size,
+            batch_size=self.batch_size,
             model_interface=self._model_interface,
             latent_variables=self.latent_variables
         )

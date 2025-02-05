@@ -9,6 +9,8 @@ import jax.tree_util
 from .interface import LieselInterface
 tfd = tfp.distributions
 
+from functools import partial
+
 
 class Optimizer:
     def __init__(
@@ -17,6 +19,7 @@ class Optimizer:
         n_epochs: int,
         model_interface: LieselInterface,
         latent_variables: List[Dict],
+        batch_size: int, #new
         patience_tol: Optional[float] = None, 
         window_size: Optional[int] = None,
     ):
@@ -24,6 +27,7 @@ class Optimizer:
         self.n_epochs = n_epochs
         self.patience_tol = patience_tol  
         self.window_size = window_size
+        self.batch_size = batch_size #new
         self.model_interface = model_interface
         self.latent_vars_config = latent_variables
         self.rng_key = jax.random.PRNGKey(self.seed)
@@ -40,7 +44,19 @@ class Optimizer:
         self.elbo_values = []
 
 
-   
+        try:
+            self.dim_data = next(
+                var.value.shape[0] 
+                for var_name, var in self.model_interface.model.vars.items() 
+                if getattr(var, "observed", True)
+            )
+        except StopIteration:
+            raise ValueError("No observed data found in model.")
+
+
+
+
+
 
 
     def _init_variational_dists_class(self):
@@ -156,13 +172,14 @@ class Optimizer:
 
     def fit(self):
 
-        @jax.jit
-        def step(current_phi, opt_state, rng_key):
+        @partial(jax.jit, static_argnames=['batch_size']) #@jax.jit
+        def step(current_phi, opt_state, rng_key, batch_size): #new
 
             (loss_val, rng_key), grads = jax.value_and_grad(
-                lambda p, key: self._elbo(p, key), 
+                lambda p, key: self._elbo(p, key, batch_size), #new
                 has_aux=True
             )(current_phi, rng_key)
+        
 
             updates, new_opt_state = self.optimizer.update(grads, opt_state, current_phi)
             new_phis = optax.apply_updates(current_phi, updates)
@@ -175,26 +192,48 @@ class Optimizer:
 
         best_elbo = -float("inf")
         window_counter = 0
+        if self.batch_size is None:
+        
+            for epoch in range(self.n_epochs):
+                bs=self.batch_size
+                phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key, bs)
+                
+                current_elbo = -loss_val
+                self.elbo_values.append(float(current_elbo))
 
-        for epoch in range(self.n_epochs):
-            phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key)
-            
-            current_elbo = -loss_val
-            self.elbo_values.append(float(current_elbo))
+                if (epoch + 1) % 1000 == 0: #Definition of early stopping in own class? 
+                    print(f"Epoch {epoch+1}, ELBO: {current_elbo:.4f}")
 
-            if (epoch + 1) % 1000 == 0:
-                print(f"Epoch {epoch+1}, ELBO: {current_elbo:.4f}")
+                if current_elbo > best_elbo + self.patience_tol:
+                    best_elbo = current_elbo
+                    window_counter = 0
+                else:
+                    window_counter += 1
 
-            if current_elbo > best_elbo + self.patience_tol:
-                best_elbo = current_elbo
-                window_counter = 0
-            else:
-                window_counter += 1
+                if window_counter >= self.window_size:
+                    print(f"Early stopping at epoch {epoch+1}")
+                    break
 
-            if window_counter >= self.window_size:
-                print(f"Early stopping at epoch {epoch+1}")
-                break
+        else:
 
+            for epoch in range(self.n_epochs):
+                phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key, self.batch_size)
+                
+                current_elbo = -loss_val
+                self.elbo_values.append(float(current_elbo))
+
+                if (epoch + 1) % 1000 == 0: #Definition of early stopping in own class? 
+                    print(f"Epoch {epoch+1}, ELBO: {current_elbo:.4f}")
+
+                if current_elbo > best_elbo + self.patience_tol:
+                    best_elbo = current_elbo
+                    window_counter = 0
+                else:
+                    window_counter += 1
+
+                if window_counter >= self.window_size:
+                    print(f"Early stopping at epoch {epoch+1}")
+                    break
 
         self.phi = phi
         self.opt_state = opt_state
@@ -202,15 +241,15 @@ class Optimizer:
 
 
     #@jax.jit
-    def _elbo(self, phi, rng_key):
+    def _elbo(self, phi, rng_key, batch_size): #neu
         num_samples = 32
         rng_keys = jax.random.split(rng_key, num_samples)
 
         @jax.jit
         def _single_sample_elbo(rng_key):
             samples, log_det_jac, log_q = self._sample_variational(phi, rng_key)
-            log_prob = self.model_interface.compute_log_prob(samples) + log_det_jac
-            return log_prob - log_q
+            log_prob = self.model_interface.compute_log_prob(samples, self.dim_data, rng_key, batch_size) + log_det_jac #new
+            return  (log_prob - log_q)
 
         elbo_samples = jax.vmap(_single_sample_elbo)(rng_keys)
         elbo = jnp.mean(elbo_samples)
@@ -218,7 +257,7 @@ class Optimizer:
     
 
     #@jax.jit
-    def _sample_variational(self, phi, rng_key):
+    def _sample_variational(self, phi, rng_key): 
         # you could split this function with a function sample_variational prob. useful for other purposes as well 
         samples = {}
         log_det_jac = 0.0
