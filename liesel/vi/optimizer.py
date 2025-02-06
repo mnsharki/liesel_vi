@@ -19,7 +19,7 @@ class Optimizer:
         n_epochs: int,
         model_interface: LieselInterface,
         latent_variables: List[Dict],
-        batch_size: int, #new
+        batch_size: Optional[int] = None, #new
         patience_tol: Optional[float] = None, 
         window_size: Optional[int] = None,
     ):
@@ -39,6 +39,7 @@ class Optimizer:
         self.fixed_distribution_params = self._init_fixed_distribution_params()
 
         self.initial_distributions = self._validate_and_build_distributions()
+        self.model_params = self.model_interface.get_params() #call of this function several times -> inneficient
 
         self.opt_state, self.optimizer = self._init_optimizer()
         self.elbo_values = []
@@ -96,7 +97,7 @@ class Optimizer:
 
     def _process_full_rank_configs(self):
         #Generalisation? Prob not possible 
-        model_params = self.model_interface.get_params()
+        #model_params = self.model_interface.get_params()
 
         for config in self.latent_vars_config:
             names = config["names"]
@@ -107,9 +108,9 @@ class Optimizer:
                 dims = []
 
                 for pname in names:
-                    if pname not in model_params:
+                    if pname not in self.model_params:
                         raise KeyError(f"Parameter {pname} not found in model parameters")
-                    dims.append(math.prod(model_params[pname].shape))
+                    dims.append(math.prod(self.model_params[pname].shape))
 
                 total_dim = sum(dims)
                 phi_conf = config["phi"]
@@ -177,6 +178,10 @@ class Optimizer:
 
             updates, new_opt_state = self.optimizer.update(grads, opt_state, current_phi)
             new_phis = optax.apply_updates(current_phi, updates)
+
+            # updates, new_opt_state = self.optimizer.update(grads, opt_state, current_phi)
+            # new_phis = jax.tree_util.tree_map(lambda p, u: p + u, current_phi, updates)
+
             return new_phis, new_opt_state, loss_val, new_rng_key
         
 
@@ -188,12 +193,24 @@ class Optimizer:
         window_counter = 0
         early_stopping_enabled = (self.patience_tol is not None and self.window_size is not None)
 
+        if self.batch_size is not None:
+            number_batches = self.dim_data // self.batch_size
+        else: 
+            self.batch_size = self.dim_data
+            number_batches = 1
 
         for epoch in range(self.n_epochs):
-            phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key, self.batch_size)
-            self.rng_key = rng_key
-
-            current_elbo = -loss_val
+            
+            epoch_elbos = []
+            for _ in range(number_batches):
+                phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key, self.batch_size)
+                self.rng_key = rng_key
+                
+                epoch_elbos.append(float(-loss_val))
+                
+                
+                
+            current_elbo = sum(epoch_elbos) / len(epoch_elbos)
             self.elbo_values.append(float(current_elbo))
 
             if (epoch + 1) % 1000 == 0:
@@ -225,7 +242,7 @@ class Optimizer:
         def _single_sample_elbo(rng_key_sample):
             samples, log_det_jac, log_q = self._sample_variational(phi, rng_key_sample)
             log_prob, _ = self.model_interface.compute_log_prob(samples, self.dim_data, rng_key_sample, batch_size)  #new
-            return  (log_prob + log_det_jac - log_q)
+            return  (self.dim_data / self.batch_size)*(log_prob + log_det_jac - log_q)
 
         elbo_samples = jax.vmap(_single_sample_elbo)(subkeys)
         elbo = jnp.mean(elbo_samples)
@@ -318,10 +335,10 @@ class Optimizer:
 
 
                 #splitting
-                model_params = self.model_interface.get_params()
+                # model_params = self.model_interface.get_params()
                 dims = []
                 for pname in config["names"]:
-                    dims.append(math.prod(model_params[pname].shape)) # only got it working with prod from  math, traceable error elsewise (for jax)
+                    dims.append(math.prod(self.model_params[pname].shape)) # only got it working with prod from  math, traceable error elsewise (for jax)
                 total_dim = sum(dims)
                 z_full_rank_flat = jnp.ravel(z_full_rank)
                 if z_full_rank_flat.shape[0] != total_dim:
@@ -339,7 +356,7 @@ class Optimizer:
 
                 for i, pname in enumerate(config["names"]):
 
-                    expected_shape = model_params[pname].shape
+                    expected_shape = self.model_params[pname].shape
 
                     z_ind = jnp.reshape(splits[i], expected_shape)
                     transform_spec = name_to_transform[pname]
