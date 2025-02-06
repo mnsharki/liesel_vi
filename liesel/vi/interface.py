@@ -39,19 +39,20 @@ class LieselInterface:
             
         if batch_size is None:
             model_copy.update()
-            return model_copy.log_prob
+            return model_copy.log_prob, rng_key
         else:
-            model_copy = self._subset_data(model_copy, batch_size, rng_key)
+            model_copy, rng_key = self._subset_data(model_copy, batch_size, rng_key)
             model_copy.update()
-
+            
             scale = dim_data / batch_size
-            return scale * model_copy.log_prob
+            return scale * model_copy.log_prob, rng_key
             
 
     def _subset_data(self, model, batch_size, rng_key):
 
         batch_size = int(batch_size) if isinstance(batch_size, (int, float)) else batch_size
 
+        
         rng_key, subset_rng = jax.random.split(rng_key)
         for var_name, var in model.vars.items():
             if getattr(var, "observed", True):
@@ -60,6 +61,6 @@ class LieselInterface:
             )
                 
                 var.value = var.value[indices]  
-                
-        return model
+
+        return model, rng_key
     

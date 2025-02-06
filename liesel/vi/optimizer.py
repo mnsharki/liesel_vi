@@ -170,14 +170,15 @@ class Optimizer:
 
         @partial(jax.jit, static_argnames=['batch_size'])
         def step(current_phi, opt_state, rng_key, batch_size): #new
-            (loss_val, rng_key), grads = jax.value_and_grad(
+            (loss_val, new_rng_key), grads = jax.value_and_grad(
                 lambda p, key: self._elbo(p, key, batch_size), #new 
                 has_aux=True
             )(current_phi, rng_key)
 
             updates, new_opt_state = self.optimizer.update(grads, opt_state, current_phi)
             new_phis = optax.apply_updates(current_phi, updates)
-            return new_phis, new_opt_state, loss_val, rng_key
+            return new_phis, new_opt_state, loss_val, new_rng_key
+        
 
         phi = self.phi
         opt_state = self.opt_state
@@ -187,8 +188,11 @@ class Optimizer:
         window_counter = 0
         early_stopping_enabled = (self.patience_tol is not None and self.window_size is not None)
 
+
         for epoch in range(self.n_epochs):
             phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key, self.batch_size)
+            self.rng_key = rng_key
+
             current_elbo = -loss_val
             self.elbo_values.append(float(current_elbo))
 
@@ -211,22 +215,21 @@ class Optimizer:
         self.opt_state = opt_state
         self.rng_key = rng_key
 
-
     #@jax.jit
     def _elbo(self, phi, rng_key, batch_size): #neu
+        rng_key, subkey = jax.random.split(rng_key)
         num_samples = 32
-        rng_keys = jax.random.split(rng_key, num_samples)
+        subkeys = jax.random.split(subkey, num_samples)
 
         @jax.jit
-        def _single_sample_elbo(rng_key):
-            samples, log_det_jac, log_q = self._sample_variational(phi, rng_key)
-            log_prob = self.model_interface.compute_log_prob(samples, self.dim_data, rng_key, batch_size) + log_det_jac #new
-            return  (log_prob - log_q)
+        def _single_sample_elbo(rng_key_sample):
+            samples, log_det_jac, log_q = self._sample_variational(phi, rng_key_sample)
+            log_prob, _ = self.model_interface.compute_log_prob(samples, self.dim_data, rng_key_sample, batch_size)  #new
+            return  (log_prob + log_det_jac - log_q)
 
-        elbo_samples = jax.vmap(_single_sample_elbo)(rng_keys)
+        elbo_samples = jax.vmap(_single_sample_elbo)(subkeys)
         elbo = jnp.mean(elbo_samples)
         return -elbo, rng_key
-    
 
     #@jax.jit
     def _sample_variational(self, phi, rng_key): 
@@ -318,7 +321,7 @@ class Optimizer:
                 model_params = self.model_interface.get_params()
                 dims = []
                 for pname in config["names"]:
-                    dims.append(math.prod(model_params[pname].shape)) # only got it workung with prod from  math, traceable error elsewise (for jax)
+                    dims.append(math.prod(model_params[pname].shape)) # only got it working with prod from  math, traceable error elsewise (for jax)
                 total_dim = sum(dims)
                 z_full_rank_flat = jnp.ravel(z_full_rank)
                 if z_full_rank_flat.shape[0] != total_dim:
