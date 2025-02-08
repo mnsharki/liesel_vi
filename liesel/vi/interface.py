@@ -37,7 +37,7 @@ class LieselInterface:
             return model_copy.log_prob, rng_key
         
         else:
-            model_copy= self._subset_data(model_copy, batch_size, dim_data, rng_key, batch_indices)    
+            model_copy= self._subset_data(model_copy, batch_indices)    
             model_copy.update()
 
             scale = (dim_data / batch_size)

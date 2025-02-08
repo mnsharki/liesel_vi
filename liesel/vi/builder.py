@@ -1,13 +1,18 @@
-from typing import Dict, List, Optional, Union, Callable
+from typing import Dict, List, Optional, Union, Callable, TypedDict
 
 import tensorflow_probability.substrates.jax.bijectors as tfb
+from tensorflow_probability.substrates import jax as tfp
+import jax.numpy as jnp
+tfd = tfp.distributions
 import optax
 
 from .interface import LieselInterface
 from .optimizer import Optimizer
 from liesel.distributions import MultivariateNormalLogCholeskyParametrization
 
-
+class Phi_MultivaraiteNormalTril(TypedDict):
+    loc: jnp.ndarray
+    scale_tril: jnp.ndarray
 
 class OptimizerBuilder:
     def __init__(
@@ -66,6 +71,8 @@ class OptimizerBuilder:
             transform=lambda z: (jnp.exp(z), jnp.sum(z))
         )
         """
+        if isinstance(names, str):
+            names = [names]
         self.latent_variables.append(
             {
                 "names": names,
@@ -76,6 +83,28 @@ class OptimizerBuilder:
                 "transform": transform,
             }
         )
+
+    def add_multivariate_latent_variable(
+        self,
+        names: List[str],
+        phi: Phi_MultivaraiteNormalTril,
+        *,
+        fixed_distribution_params: Optional[Dict[str, float]] = None,
+        optimizer_chain: optax.GradientTransformation,
+        transform: Optional[Union[Callable, tfb.Bijector]] = None
+        ):
+
+        self.latent_variables.append(
+            {
+                "names": names,
+                "dist_class":  tfd.MultivariateNormalTriL,
+                "phi": phi,   
+                "fixed_distribution_params": fixed_distribution_params,
+                "optimizer_chain": optimizer_chain,
+                "transform": transform,
+            }
+        )
+        
 
 
     def build(self) -> "Optimizer":
