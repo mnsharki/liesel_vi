@@ -34,7 +34,7 @@ class LieselInterface:
             
         if batch_size is None:
             model_copy.update()
-            return model_copy.log_prob, rng_key
+            return model_copy.log_prob
         
         else:
             model_copy= self._subset_data(model_copy, batch_indices)    

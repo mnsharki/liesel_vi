@@ -192,7 +192,7 @@ class Optimizer:
         if self.batch_size is not None:
             number_batches = dim_data // batch_size
         else: 
-            batch_size = dim_data
+            #batch_size = dim_data
             number_batches = 1
 
         for epoch in range(self.n_epochs):
