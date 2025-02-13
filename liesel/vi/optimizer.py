@@ -4,9 +4,12 @@ import jax
 import jax.numpy as jnp
 import optax
 from tensorflow_probability.substrates import jax as tfp
-from jax.flatten_util import ravel_pytree
 import jax.tree_util 
 from .interface import LieselInterface
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 tfd = tfp.distributions
 
 from functools import partial
@@ -21,7 +24,8 @@ class Optimizer:
         latent_variables: List[Dict],
         batch_size: Optional[int] = None, 
         patience_tol: Optional[float] = None, 
-        window_size: Optional[int] = None,
+        window_size: Optional[int] = None#,
+       # S: Optional[int] = 32
     ):
         self.seed = seed
         self.n_epochs = n_epochs
@@ -226,7 +230,7 @@ class Optimizer:
         self.phi = phi
         self.opt_state = opt_state
         self.rng_key = rng_key
-
+        self.final_variational_distributions = self.get_final_distributions()
 
     def _elbo(self, phi, rng_key, dim_data, batch_size, batch_indices):
         rng_key, subkey = jax.random.split(rng_key)
@@ -373,3 +377,59 @@ class Optimizer:
                 total_log_q += log_q
 
         return samples, total_ldj, total_log_q
+    
+    def _get_final_variational_params(self):
+
+
+        return self._build_distribution(
+            self.variational_dists_class[pname],
+            pval,
+            self.fixed_distribution_params[pname]
+        )
+
+    def get_final_distributions(self): #check whether it also works for full rank and non gaussian distributions 
+
+        final_results = {}
+
+        for config in self.latent_vars_config:
+
+            names = config["names"]
+            transform = config.get("transform", None)
+            dist_class = self.variational_dists_class[self._config_key(config)]
+            phi_original = self.phi[self._config_key(config)]
+
+            
+            phi_transformed = {}
+            
+            for param_name, param_value in phi_original.items():
+            
+                if transform is None:
+                    phi_transformed[param_name] = param_value  
+            
+                elif callable(transform) and not hasattr(transform, "forward"):
+                    phi_transformed[param_name], _ = transform(param_value)  
+            
+                elif hasattr(transform, "forward"):
+                    phi_transformed[param_name] = transform.forward(param_value)  
+            
+            final_distribution = self._build_distribution(
+                dist_class, phi_transformed, self.fixed_distribution_params[self._config_key(config)]
+            )
+
+            final_results.update({name: final_distribution for name in names})
+
+        return final_results
+
+        
+    def plot_elbo(self, title="ELBO Progress", xlabel="Iterations", ylabel="Negative ELBO", style="whitegrid", color_palette="deep", save_path=None):
+        sns.set_theme(style=style)
+        plt.figure(figsize=(10, 6))
+        sns.lineplot(self.elbo_values, palette=color_palette)
+        plt.title(title)
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
+        plt.ylim()
+        if save_path:
+            plt.savefig(save_path)
+        plt.show()
+
