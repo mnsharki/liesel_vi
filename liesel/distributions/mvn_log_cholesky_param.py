@@ -79,6 +79,7 @@ class MultivariateNormalLogCholeskyParametrization(tfd.Distribution):
         self,
         loc: Array,
         log_cholesky_parametrization: Array,
+        d: int,
         validate_args: bool = False,
         allow_nan_stats: bool = True,
         name: str = "MultivariateNormalLogCholeskyParametrization",
@@ -88,8 +89,7 @@ class MultivariateNormalLogCholeskyParametrization(tfd.Distribution):
         loc_ = jnp.array(loc)
         log_cholesky_parametrization_ = jnp.array(log_cholesky_parametrization)
 
-        self._d = int((-1 + jnp.sqrt(1 + 8 * log_cholesky_parametrization_.shape[-1])) / 2)
-
+        self._d = d
         self._loc = jnp.repeat(loc_, self._d) if loc_.ndim == 0 else loc
         self._log_cholesky_parametrization = log_cholesky_parametrization
         self._cholesky_precision = inverse_log_cholesky_parametrization(
@@ -127,7 +127,7 @@ class MultivariateNormalLogCholeskyParametrization(tfd.Distribution):
         return self._loc
 
 
-    def _sample_n(self, n, seed=None) -> Array:
+    def _sample_n(self, n, seed) -> Array:
         shape = [n] + self.batch_shape + self.event_shape
         z = jax.random.normal(seed, shape)
 
