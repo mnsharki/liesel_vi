@@ -10,7 +10,7 @@ from .interface import LieselInterface
 from .optimizer import Optimizer
 from liesel.distributions import MultivariateNormalLogCholeskyParametrization
 
-class Phi_MultivaraiteNormalTril(TypedDict):
+class Phi_MultivariteNormalTril(TypedDict):
     loc: jnp.ndarray
     scale_tril: jnp.ndarray
 
@@ -87,7 +87,7 @@ class OptimizerBuilder:
     def add_multivariate_latent_variable(
         self,
         names: List[str],
-        phi: Phi_MultivaraiteNormalTril,
+        phi: Phi_MultivariateNormalTril,
         *,
         fixed_distribution_params: Optional[Dict[str, float]] = None,
         optimizer_chain: optax.GradientTransformation,

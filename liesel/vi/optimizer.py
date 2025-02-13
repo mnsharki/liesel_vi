@@ -99,7 +99,7 @@ class Optimizer:
         return dist_class(**phi, **fixed_distribution_params)
     
 
-    def _process_full_rank_configs(self):
+    def _process_full_rank_configs(self): # Error messages need to be updated once dist works. as well as checks of dims etc 
         model_params = self.model_interface.get_params()
 
         for config in self.latent_vars_config:
@@ -153,8 +153,8 @@ class Optimizer:
 
     def _init_optimizer(self):
         
-        def label_fn(params):
-            return {k: k for k in params if hasattr(self, 'phi') and k in self.phi}
+        def label_fn(params): # We construct phi always _> check redundant
+            return {k: k for k in params if k in self.phi}
 
         optim_dict = self._init_transform_dict()
         tx = optax.multi_transform(optim_dict, label_fn)
@@ -192,7 +192,6 @@ class Optimizer:
         if self.batch_size is not None:
             number_batches = dim_data // batch_size
         else: 
-            #batch_size = dim_data
             number_batches = 1
 
         for epoch in range(self.n_epochs):
@@ -208,7 +207,7 @@ class Optimizer:
 
             current_elbo = jnp.mean(jnp.array(epoch_elbos))
             self.elbo_values.append(float(current_elbo))
-
+            #print(phi)
             if (epoch + 1) % 1000 == 0:
                 print(f"Epoch {epoch+1}, ELBO: {current_elbo:.4f}")
 
@@ -244,21 +243,8 @@ class Optimizer:
         elbo = jnp.mean(elbo_samples)
 
         return -elbo, rng_key
-
-
-    def _sample_variational(self, phi, rng_key): # you could split this function with a function sample_variational prob. useful for other purposes as well 
-        
-        samples = {}
-        log_det_jac = 0.0
-        log_q_z = 0.0
-
-        name_to_transform = {
-            pname: config.get("transform", None)
-            for config in self.latent_vars_config
-            for pname in config["names"]
-        }
-        
-        def apply_transform(z, transform_spec):
+    
+    def _apply_transform(self, z, transform_spec):
 
             if transform_spec is None:
                 
@@ -271,7 +257,7 @@ class Optimizer:
                 z_transformed = transform_spec.forward(z)
                 
                 event_ndims = 1 if z.ndim == 1 else 0
-                ldj = transform_spec.forward_log_det_jacobian(z_transformed, event_ndims=event_ndims)
+                ldj = transform_spec.forward_log_det_jacobian(z, event_ndims=event_ndims) #z_transformed
 
                 if ldj.ndim > 0:
                     ldj = jnp.sum(ldj)
@@ -279,81 +265,111 @@ class Optimizer:
             else:
                 raise ValueError("Only tfb.Bijector instances and Python callables are supported as transforms")
 
+    def _sample_single_variable(self, pname, phi, rng_key, transform_spec):
+
+        pval = phi[pname]
+        
+        dist_obj = self._build_distribution(
+            self.variational_dists_class[pname],
+            pval,
+            self.fixed_distribution_params[pname]
+        )
+
+        if dist_obj.reparameterization_type == tfd.FULLY_REPARAMETERIZED: #rm
+            rng_key, subkey = jax.random.split(rng_key)
+            z = dist_obj.sample(seed=subkey)
+
+            log_q = dist_obj.log_prob(z)
+            z_transformed, ldj = self._apply_transform(z, transform_spec)
+        
+        else:
+            raise NotImplementedError("Only fully reparameterized distributions are supported so far.")
+        
+        return z_transformed, ldj, log_q, rng_key
+    
+
+    def _sample_full_rank(self, config, phi, rng_key, name_to_transform): #doesnt need error anymore because of only using MultivariateNormalTriL
+
+        full_rank_key = config["full_rank_key"]
+        pval = phi[full_rank_key]
+        
+        dist_obj = self._build_distribution(
+            self.variational_dists_class[full_rank_key],
+            pval,
+            self.fixed_distribution_params[full_rank_key]
+        )
+        
+        rng_key, subkey = jax.random.split(rng_key)
+        z_full_rank = dist_obj.sample(seed=subkey)
+        log_q = dist_obj.log_prob(z_full_rank)
+
+        model_params = self.model_interface.get_params()
+        dims = [math.prod(model_params[pname].shape) for pname in config["names"]]
+        total_dim = sum(dims)
+        z_full_rank_flat = jnp.ravel(z_full_rank)
+        if z_full_rank_flat.shape[0] != total_dim:
+            raise ValueError(
+                f"Dimension mismatch for full rank latent variables {config['names']}: "
+                f"expected {total_dim}, got {z_full_rank_flat.shape[0]}"
+            )
+
+        cum_dims = []
+        running_sum = 0
+        for d in dims[:-1]:
+            running_sum += d
+            cum_dims.append(running_sum)
+        splits = jnp.split(z_full_rank_flat, cum_dims)
+
+        
+
+        samples = {}
+        total_ldj = 0.0
+        for i, pname in enumerate(config["names"]):
+
+            expected_shape = model_params[pname].shape
+            
+            z_ind = jnp.reshape(splits[i], expected_shape)
+            transform_spec = name_to_transform[pname]
+            z_transformed, ldj = self._apply_transform(z_ind, transform_spec)
+            
+            samples[pname] = z_transformed
+            total_ldj += ldj
+
+        return samples, total_ldj, log_q, rng_key
+    
+    def _sample_variational(self, phi, rng_key):
+
+        samples = {}
+        total_ldj = 0.0
+        total_log_q = 0.0
+
+        name_to_transform = {
+            pname: config.get("transform", None)
+            for config in self.latent_vars_config
+            for pname in config["names"]
+        }
+
         for config in self.latent_vars_config:
+
             if len(config["names"]) == 1:
 
                 pname = config["names"][0]
-                pval = phi[pname]
-                dist_obj = self._build_distribution(
-                    self.variational_dists_class[pname],
-                    pval,
-                    self.fixed_distribution_params[pname]
+                z_transformed, ldj, log_q, rng_key = self._sample_single_variable(
+                    pname, phi, rng_key, name_to_transform[pname]
                 )
-
-                if dist_obj.reparameterization_type == tfd.FULLY_REPARAMETERIZED:
-                    rng_key, subkey = jax.random.split(rng_key)
-                    z = dist_obj.sample(seed=subkey)
-
-                    log_q_z += dist_obj.log_prob(z)
-
-                else:
-                    raise NotImplementedError("Only fully reparameterized distributions are supported so far.")
-
-                transform_spec = name_to_transform[pname]
-                z_transformed, ldj = apply_transform(z, transform_spec)
-                log_det_jac += ldj
-                samples[pname] = z_transformed
-
-            else: 
-
-                full_rank_key = config["full_rank_key"]
-                pval = phi[full_rank_key]
-                dist_obj = self._build_distribution(
-                    self.variational_dists_class[full_rank_key],
-                    pval,
-                    self.fixed_distribution_params[full_rank_key]
-                )
-
-                if dist_obj.reparameterization_type == tfd.FULLY_REPARAMETERIZED:
-
-                    rng_key, subkey = jax.random.split(rng_key)
-                    z_full_rank = dist_obj.sample(seed=subkey)
-
-                    log_q_z += dist_obj.log_prob(z_full_rank)
-
-                else:
-                    raise NotImplementedError("Only fully reparameterized distributions are supported so far.")
-
-                model_params = self.model_interface.get_params()
-                dims = []
-                for pname in config["names"]:
-                    dims.append(math.prod(model_params[pname].shape)) # only got it working with prod from  math, traceable error elsewise (for jax)
-                total_dim = sum(dims)
-
-                z_full_rank_flat = jnp.ravel(z_full_rank)
-                if z_full_rank_flat.shape[0] != total_dim:
-                    raise ValueError(
-                        f"Dimension mismatch for full rank latent variables {config['names']}: "
-                        f"expected {total_dim}, got {z_full_rank_flat.shape[0]}"
-                    )
                 
-                cum_dims = []
-                running_sum = 0
-                for d in dims[:-1]:
-                    running_sum += d
-                    cum_dims.append(running_sum)
-                splits = jnp.split(z_full_rank_flat, cum_dims)
+                samples[pname] = z_transformed
+                total_ldj += ldj
+                total_log_q += log_q
+            
+            else:
+                
+                full_samples, ldj, log_q, rng_key = self._sample_full_rank(
+                    config, phi, rng_key, name_to_transform
+                )
+                
+                samples.update(full_samples)
+                total_ldj += ldj
+                total_log_q += log_q
 
-                for i, pname in enumerate(config["names"]):
-
-                    expected_shape = model_params[pname].shape
-
-                    z_ind = jnp.reshape(splits[i], expected_shape)
-                    transform_spec = name_to_transform[pname]
-                    z_transformed, ldj = apply_transform(z_ind, transform_spec)
-
-                    log_det_jac += ldj
-                    samples[pname] = z_transformed
-
-        return samples, log_det_jac, log_q_z
-
+        return samples, total_ldj, total_log_q
