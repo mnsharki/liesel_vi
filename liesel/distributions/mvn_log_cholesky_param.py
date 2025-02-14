@@ -10,6 +10,7 @@ import tensorflow_probability.substrates.jax.distributions as tfd
 from functools import partial
 from tensorflow_probability.python.internal import reparameterization
 from tensorflow_probability.substrates.jax import tf2jax as tf
+from tensorflow_probability.substrates.jax.distributions import mvn_linear_operator
 
 Array = Any
 
@@ -71,7 +72,7 @@ def mvn_precision_chol_log_prob(x: Array, loc: Array, precision_matrix_chol: Arr
 
 @partial(jnp.vectorize, excluded=(2,), signature='(k,k),(k)->(k)')
 def _triangular_solve(a, b, lower):
-    return jsp.linalg.solve_triangular(a, b, lower=lower)
+    return jax.lax.linalg.triangular_solve(a, b, lower=lower)
 
 
 class MultivariateNormalLogCholeskyParametrization(tfd.Distribution):
@@ -87,7 +88,6 @@ class MultivariateNormalLogCholeskyParametrization(tfd.Distribution):
         parameters = dict(locals())
 
         loc_ = jnp.array(loc)
-        log_cholesky_parametrization_ = jnp.array(log_cholesky_parametrization)
 
         self._d = d
         self._loc = jnp.repeat(loc_, self._d) if loc_.ndim == 0 else loc
@@ -96,21 +96,22 @@ class MultivariateNormalLogCholeskyParametrization(tfd.Distribution):
             self._log_cholesky_parametrization, self._d
         )
 
-        cholesky_precision = jnp.shape(log_cholesky_parametrization)[:-1]
+        cholesky_precision_shape = jnp.shape(log_cholesky_parametrization)[:-1]
         loc_batches = jnp.shape(loc)[:-1]
         self._broadcast_batch_shape = jnp.broadcast_shapes(
-            cholesky_precision,
+            cholesky_precision_shape,
             loc_batches
         )
 
         super().__init__(
-            dtype=log_cholesky_parametrization.dtype,
+            dtype=self._cholesky_precision.dtype,
             reparameterization_type=reparameterization.FULLY_REPARAMETERIZED,
             validate_args=validate_args,
             allow_nan_stats=allow_nan_stats,
             parameters=parameters,
-            name=name,
+            name=name
         )
+
 
     @property
     def cholesky_precision(self) -> Array:
@@ -156,4 +157,3 @@ class MultivariateNormalLogCholeskyParametrization(tfd.Distribution):
 
     def _batch_shape_tensor(self):
         return jnp.array(self._broadcast_batch_shape, dtype=jnp.int32)
-
