@@ -10,14 +10,16 @@ from .interface import LieselInterface
 from .optimizer import Optimizer
 from liesel.distributions import MultivariateNormalLogCholeskyParametrization
 
-class Phi_MultivariteNormalTril(TypedDict):
+class Phi_MultivariateNormalTril(TypedDict):
     loc: jnp.ndarray
     scale_tril: jnp.ndarray
 
 class OptimizerBuilder:
     def __init__(
-            self, seed: int = 0, 
+            self, 
+            seed: int = 0, 
             n_epochs: int = 10_000, 
+            S: int = 32,
             patience_tol: Optional[float] = None, 
             window_size: Optional[int] = None,
             batch_size: Optional[int] = None
@@ -27,6 +29,7 @@ class OptimizerBuilder:
         self.patience_tol = patience_tol 
         self.window_size = window_size
         self.batch_size = batch_size
+        self.S = S
         self._model_interface = None
         self.latent_variables = []
 
@@ -114,6 +117,7 @@ class OptimizerBuilder:
         return Optimizer(
             seed=self.seed,
             n_epochs=self.n_epochs,
+            S=self.S,
             patience_tol=self.patience_tol,
             window_size=self.window_size,
             batch_size=self.batch_size,

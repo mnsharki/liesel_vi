@@ -20,17 +20,19 @@ class Optimizer:
         self,
         seed: int,
         n_epochs: int,
+        S: int,
         model_interface: LieselInterface,
         latent_variables: List[Dict],
         batch_size: Optional[int] = None, 
         patience_tol: Optional[float] = None, 
-        window_size: Optional[int] = None#,
-       # S: Optional[int] = 32
+        window_size: Optional[int] = None,
+        
     ):
         self.seed = seed
         self.n_epochs = n_epochs
         self.patience_tol = patience_tol  
         self.window_size = window_size
+        self.S = S
         self.batch_size = batch_size
         self.model_interface = model_interface
         self.latent_vars_config = latent_variables
@@ -169,10 +171,10 @@ class Optimizer:
 
     def fit(self):
 
-        @partial(jax.jit, static_argnames=['batch_size'])
-        def step(current_phi, opt_state, rng_key, dim_data, batch_size, batch_indices): 
+        @partial(jax.jit, static_argnames=['batch_size', 'S'])
+        def step(current_phi, opt_state, rng_key, dim_data, batch_size, batch_indices, S): 
             (loss_val, new_rng_key), grads = jax.value_and_grad(
-                lambda p, key: self._elbo(p, key, dim_data, batch_size, batch_indices), 
+                lambda p, key: self._elbo(p, key, dim_data, batch_size, batch_indices, S), 
                 has_aux=True
             )(current_phi, rng_key)
 
@@ -206,7 +208,7 @@ class Optimizer:
             
             epoch_elbos = []
             for batch_indices in batch_indices_list:
-                phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key, dim_data, batch_size, batch_indices)
+                phi, opt_state, loss_val, rng_key = step(phi, opt_state, rng_key, dim_data, batch_size, batch_indices, self.S)
                 epoch_elbos.append(float(-loss_val))
 
             current_elbo = jnp.mean(jnp.array(epoch_elbos))
@@ -232,9 +234,9 @@ class Optimizer:
         self.rng_key = rng_key
         self.final_variational_distributions = self.get_final_distributions()
 
-    def _elbo(self, phi, rng_key, dim_data, batch_size, batch_indices):
+    def _elbo(self, phi, rng_key, dim_data, batch_size, batch_indices, S):
         rng_key, subkey = jax.random.split(rng_key)
-        num_samples = 32
+        num_samples = S
         subkeys = jax.random.split(subkey, num_samples)
 
         @jax.jit
