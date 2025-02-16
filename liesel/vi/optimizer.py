@@ -556,7 +556,7 @@ class Optimizer:
 
         return final_results
 
-    def plot_elbo(self, title="ELBO Progress", xlabel="Iterations", ylabel="Negative ELBO", style="whitegrid", color_palette="deep", save_path=None):
+    def plot_elbo(self, title="ELBO Progress", xlabel="Iterations", ylabel="Negative ELBO", style="whitegrid", color="blue", save_path=None):
         """
         Plot the ELBO progress over iterations.
 
@@ -570,14 +570,14 @@ class Optimizer:
             Label for the y-axis.
         style : str, optional
             Seaborn style for the plot.
-        color_palette : str, optional
-            Color palette for the line plot.
+        color : str, optional
+            Color for the line plot.
         save_path : str, optional
             If provided, the plot will be saved to the specified path.
         """
         sns.set_theme(style=style)
         plt.figure(figsize=(10, 6))
-        sns.lineplot(self.elbo_values, palette=color_palette)
+        sns.lineplot(x=range(len(self.elbo_values)), y=self.elbo_values, color=color)
         plt.title(title)
         plt.xlabel(xlabel)
         plt.ylabel(ylabel)
