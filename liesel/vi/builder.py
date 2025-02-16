@@ -10,9 +10,9 @@ from .interface import LieselInterface
 from .optimizer import Optimizer
 from liesel.distributions import MultivariateNormalLogCholeskyParametrization
 
-class Phi_MultivariateNormalTril(TypedDict):
+class Phi_MultivariateNormalLogCholeskyParametrization(TypedDict):
     loc: jnp.ndarray
-    scale_tril: jnp.ndarray
+    log_cholesky_parametrization: jnp.ndarray 
 
 class OptimizerBuilder:
     def __init__(
@@ -90,17 +90,31 @@ class OptimizerBuilder:
     def add_multivariate_latent_variable(
         self,
         names: List[str],
-        phi: Phi_MultivariateNormalTril,
+        phi: Optional[Phi_MultivariateNormalLogCholeskyParametrization] = None,  
         *,
         fixed_distribution_params: Optional[Dict[str, float]] = None,
         optimizer_chain: optax.GradientTransformation,
         transform: Optional[Union[Callable, tfb.Bijector]] = None
         ):
+        if fixed_distribution_params is None:
+            fixed_distribution_params = {}
+            
+        if "d" not in fixed_distribution_params:
+            d = sum(jnp.array(self._model_interface.model.vars[var].value).size for var in names)
+            fixed_distribution_params["d"] = d
+
+        d = fixed_distribution_params["d"]  
+
+        if phi is None:
+            phi = {
+                "loc": jnp.ones(d),  
+                "log_cholesky_parametrization": self.make_log_cholesky_like(d)
+            }
 
         self.latent_variables.append(
             {
                 "names": names,
-                "dist_class":  tfd.MultivariateNormalTriL,
+                "dist_class": MultivariateNormalLogCholeskyParametrization, 
                 "phi": phi,   
                 "fixed_distribution_params": fixed_distribution_params,
                 "optimizer_chain": optimizer_chain,
@@ -124,4 +138,14 @@ class OptimizerBuilder:
             model_interface=self._model_interface,
             latent_variables=self.latent_variables
         )
+    
+    def make_log_cholesky_like(self, d: int):
 
+        n = d*(d+1)//2
+        arr = jnp.zeros((n,), dtype=jnp.float32)
+        offset = 0
+        for row in range(d):
+            arr = arr.at[offset + row].set(1.1)
+            offset += (row + 1)
+
+        return arr

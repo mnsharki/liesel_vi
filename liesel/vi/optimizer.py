@@ -105,15 +105,13 @@ class Optimizer:
         return dist_class(**phi, **fixed_distribution_params)
     
 
-    def _process_full_rank_configs(self): # Error messages need to be updated once dist works. as well as checks of dims etc 
+    def _process_full_rank_configs(self):
         model_params = self.model_interface.get_params()
 
         for config in self.latent_vars_config:
             names = config["names"]
 
             if len(names) > 1:
-                if config["dist_class"] is not tfd.MultivariateNormalTriL: #Placeholder till class from Gianmarco
-                    raise NotImplementedError("Full rank optimisation is only supported for MultivariateNormalLogCholeskyParametrization")
                 dims = []
 
                 for pname in names:
@@ -129,10 +127,13 @@ class Optimizer:
                     raise ValueError(f"Dimension mismatch for full rank latent variables {names}: "
                                      f"expected loc dim {total_dim}, got {phi_conf['loc'].shape[0]}")
                 
-                if phi_conf["scale_tril"].shape != (total_dim, total_dim):
-                    raise ValueError(f"Dimension mismatch for full rank latent variables {names}: "
-                                     f"expected scale_tril shape {(total_dim, total_dim)}, got {phi_conf['scale_tril'].shape}")
-                
+                expected_len = total_dim * (total_dim + 1) // 2
+                if phi_conf["log_cholesky_parametrization"].shape[0] != expected_len:
+                    raise ValueError(
+                        f"Dimension mismatch for full rank latent variables {names}: "
+                        f"expected a flattened Cholesky of length {expected_len}, "
+                        f"got {phi_conf['log_cholesky_parametrization'].shape[0]}"
+                    )
 
                 config["full_rank_key"] = "Full Rank:" + "_".join(names)
 
