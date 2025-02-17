@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import math
 import jax
 import jax.numpy as jnp
@@ -408,7 +408,7 @@ class Optimizer:
         return z_transformed, ldj, log_q, rng_key
     
 
-    def _sample_full_rank(self, config, phi, rng_key, name_to_transform): #doesnt need error anymore because of only using MultivariateNormalTriL
+    def _sample_full_rank(self, config, phi, rng_key, name_to_transform): 
         """
         Sample latent variables jointly using a Full-Rank variational distribution a self created 
         instance of a TFP distribution: the MultivariateNormalLogCholeskyParametrization.
@@ -520,11 +520,12 @@ class Optimizer:
                 total_log_q += log_q
 
         return samples, total_ldj, total_log_q
-
+    
     def get_final_distributions(self): 
         """
         Construct and return the final variational distributions after applying specified 
-        transformations back into constrained space by applying bijectors.
+        transformations back into constrained space by applying bijectors. DOes differ 
+        for univariate and multivariate latent variables by key. 
 
         Returns
         -------
@@ -536,9 +537,10 @@ class Optimizer:
 
         for config in self.latent_vars_config:
             names = config["names"]
+            key = self._config_key(config)  # returns config["names"][0] if univariate, or if multivariate config["full_rank_key"]
             transform = config.get("transform", None)
-            dist_class = self.variational_dists_class[self._config_key(config)]
-            phi_original = self.phi[self._config_key(config)]
+            dist_class = self.variational_dists_class[key]
+            phi_original = self.phi[key]
 
             phi_transformed = {}
             for param_name, param_value in phi_original.items():
@@ -548,41 +550,73 @@ class Optimizer:
                     phi_transformed[param_name], _ = transform(param_value)  
                 elif hasattr(transform, "forward"):
                     phi_transformed[param_name] = transform.forward(param_value)  
-            
+
             final_distribution = self._build_distribution(
-                dist_class, phi_transformed, self.fixed_distribution_params[self._config_key(config)]
+                dist_class, phi_transformed, self.fixed_distribution_params[key]
             )
+
             final_results.update({name: final_distribution for name in names})
-
+            if len(names) > 1:
+                final_results[key] = final_distribution
         return final_results
-
-    def plot_elbo(self, title="ELBO Progress", xlabel="Iterations", ylabel="Negative ELBO", style="whitegrid", color="blue", save_path=None):
+    
+    def get_results(self, n_samples: int = 10_000, seed: jax.random.PRNGKey = jax.random.PRNGKey(0)) -> Dict[str, Any]:
         """
-        Plot the ELBO progress over iterations.
+        Generate inference results by sampling from the final variational distributions
+        consistently, handling both univariate and multivariate latent variables.
+
+        For multivariate latent variables, this method samples once from the composite distribution
+        (using the composite key) and splits the flat sample into individual components based on the
+        dimensions from the model parameters.
 
         Parameters
         ----------
-        title : str, optional
-            Title of the plot.
-        xlabel : str, optional
-            Label for the x-axis.
-        ylabel : str, optional
-            Label for the y-axis.
-        style : str, optional
-            Seaborn style for the plot.
-        color : str, optional
-            Color for the line plot.
-        save_path : str, optional
-            If provided, the plot will be saved to the specified path.
-        """
-        sns.set_theme(style=style)
-        plt.figure(figsize=(10, 6))
-        sns.lineplot(x=range(len(self.elbo_values)), y=self.elbo_values, color=color)
-        plt.title(title)
-        plt.xlabel(xlabel)
-        plt.ylabel(ylabel)
-        plt.ylim()
-        if save_path:
-            plt.savefig(save_path)
-        plt.show()
+        n_samples : int
+            Number of samples to draw from each variational distribution.
+        seed : jax.random.PRNGKey
+            Random key for sampling.
 
+        Returns
+        -------
+        results : dict
+            Dictionary containing:
+            - "final_variational_distributions": the final variational distribution objects.
+            - "elbo_values": the ELBO progression.
+            - "samples": a dict mapping latent variable names to their samples.
+            - "seed": the updated PRNGKey after sampling.
+        """
+        results = {}
+        samples = {}
+        keys = jax.random.split(seed, len(self.latent_vars_config) + 1)
+        
+        model_params = self.model_interface.get_params()
+        
+        for i, config in enumerate(self.latent_vars_config):
+            if len(config["names"]) == 1:
+                name = config["names"][0]
+                dist = self.final_variational_distributions[name]
+                samples[name] = dist.sample(n_samples, seed=keys[i+1])
+            else:
+                composite_key = config["full_rank_key"]
+                dist = self.final_variational_distributions[composite_key]
+                composite_sample = dist.sample(n_samples, seed=keys[i+1])
+                dims = []
+                for var in config["names"]:
+                    dims.append(int(jnp.prod(jnp.array(model_params[var].shape))))
+                total_dim = sum(dims)
+                flat_sample = jnp.reshape(composite_sample, (n_samples, total_dim))
+                cum_dims = []
+                running_sum = 0
+                for d in dims[:-1]:
+                    running_sum += d
+                    cum_dims.append(running_sum)
+                split_samples = jnp.split(flat_sample, cum_dims, axis=1)
+                for j, var in enumerate(config["names"]):
+                    var_shape = model_params[var].shape
+                    samples[var] = jnp.reshape(split_samples[j], (n_samples,) + var_shape)
+        
+        results["final_variational_distributions"] = self.final_variational_distributions
+        results["elbo_values"] = self.elbo_values
+        results["samples"] = samples
+        results["seed"] = keys[0]
+        return results
