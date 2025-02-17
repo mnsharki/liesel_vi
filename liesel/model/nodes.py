@@ -12,7 +12,16 @@ from collections.abc import Callable, Hashable, Iterable
 from functools import wraps
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard, TypeVar, Union
+from typing import (
+    IO,
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    NamedTuple,
+    TypeGuard,
+    TypeVar,
+    Union,
+)
 
 import tensorflow_probability.substrates.jax.bijectors as jb
 import tensorflow_probability.substrates.jax.distributions as jd
@@ -20,6 +29,7 @@ import tensorflow_probability.substrates.numpy.bijectors as nb
 import tensorflow_probability.substrates.numpy.distributions as nd
 
 from ..distributions.nodist import NoDistribution
+from .viz import plot_nodes, plot_vars
 
 if TYPE_CHECKING:
     from .model import Model
@@ -599,7 +609,7 @@ class Value(Node):
 
     Adding this node to a model leads to an automatically generated name:
 
-    >>> model = lsl.GraphBuilder().add(nameless_node).build_model()
+    >>> model = lsl.Model([nameless_node])
     >>> nameless_node
     Value(name="n0")
 
@@ -720,7 +730,7 @@ class Calc(Node):
 
     A simple calculator node, taking the exponential value of an input parameter.
 
-    >>> log_scale = lsl.param(0.0, name="log_scale")
+    >>> log_scale = lsl.Var.new_param(0.0, name="log_scale")
     >>> scale = lsl.Calc(jnp.exp, log_scale)
     >>> print(scale.value)
     1.0
@@ -736,7 +746,7 @@ class Calc(Node):
 
     >>> def compute_variance(x):
     ...     return jnp.exp(x)**2
-    >>> log_scale = lsl.param(0.0, name="log_scale")
+    >>> log_scale = lsl.Var.new_param(0.0, name="log_scale")
     >>> variance = lsl.Calc(compute_variance, log_scale).update()
     >>> print(variance.value)
     1.0
@@ -756,8 +766,9 @@ class Calc(Node):
     ):
         super().__init__(*inputs, **kwinputs, _name=_name, _needs_seed=_needs_seed)
         self._function = function
+        self.update_on_init = update_on_init
 
-        if update_on_init:
+        if self.update_on_init:
             try:
                 self.update()
             except Exception as e:
@@ -885,7 +896,7 @@ class Dist(Node):
 
 
     >>> dist = lsl.Dist(tfd.Normal, loc=0.0, scale=1.0)
-    >>> y = lsl.obs(jnp.array([-0.5, 0.0, 0.5]), dist, name="y")
+    >>> y = lsl.Var.new_obs(jnp.array([-0.5, 0.0, 0.5]), dist, name="y")
     >>> print(y.log_prob)
     None
 
@@ -897,10 +908,10 @@ class Dist(Node):
     Now we define the same observation model, but include the location and scale
     as parameters:
 
-    >>> loc = lsl.param(0.0, name="loc")
-    >>> scale = lsl.param(1.0, name="scale")
+    >>> loc = lsl.Var.new_param(0.0, name="loc")
+    >>> scale = lsl.Var.new_param(1.0, name="scale")
     >>> dist = lsl.Dist(tfd.Normal, loc=loc, scale=scale)
-    >>> y = lsl.obs(jnp.array([-0.5, 0.0, 0.5]), dist, name="y").update()
+    >>> y = lsl.Var.new_obs(jnp.array([-0.5, 0.0, 0.5]), dist, name="y").update()
     >>> y.log_prob
     Array([-1.0439385, -0.9189385, -1.0439385], dtype=float32)
 
@@ -1579,7 +1590,7 @@ class Var:
         We first set up the parameter var with its distribution:
 
         >>> prior = lsl.Dist(tfd.HalfCauchy, loc=0.0, scale=25.0)
-        >>> scale = lsl.param(1.0, prior, name="scale")
+        >>> scale = lsl.Var.new_param(1.0, prior, name="scale")
 
         The we transform the variable to the log-scale:
 
@@ -1596,8 +1607,8 @@ class Var:
         >>> scale.update().log_prob
         0.0
         """
-        if self.weak:
-            raise RuntimeError(f"{repr(self)} is weak")
+        # if self.weak:
+        #     raise RuntimeError(f"{repr(self)} is weak")
 
         if is_bijector_class(bijector) and not (bijector_args or bijector_kwargs):
             raise ValueError(
@@ -1948,6 +1959,192 @@ class Var:
     def __repr__(self) -> str:
         return f'{type(self).__name__}(name="{self.name}")'
 
+    def _plot(
+        self, which: Literal["vars", "nodes"] = "vars", verbose: bool = False, **kwargs
+    ) -> None:
+
+        if self.model is not None:
+            match which:
+                case "vars":
+                    subgraph = self.model.var_parental_subgraph(self)
+                    return plot_vars(subgraph, **kwargs)
+                case "nodes":
+                    self_nodes = [self.value_node, self.dist_node, self.var_value_node]
+                    filtered_nodes = [nd for nd in self_nodes if nd is not None]
+                    subgraph = self.model.node_parental_subgraph(*filtered_nodes)
+                    return plot_nodes(subgraph, **kwargs)
+
+        from liesel.model import GraphBuilder
+
+        gb = GraphBuilder().add(self)
+        nodes, _vars = gb._all_nodes_and_vars()
+
+        automatically_set_names = gb._set_missing_names()
+        var_names = automatically_set_names["vars"]
+        node_names = automatically_set_names["nodes"]
+        if var_names:
+            if verbose:
+                names_ = f"The automatically assigned names are: {var_names}. "
+            else:
+                names_ = ""
+            logger.info(
+                f"Unnamed variables were temporarily named for plotting. {names_}"
+                "The names are reset"
+                " after plotting."
+            )
+        if node_names:
+            if verbose:
+                names_ = f"The automatically assigned names are: {node_names}. "
+            else:
+                names_ = ""
+            logger.info(
+                f"Unnamed nodes were temporarily named for plotting. {names_}"
+                "The names are reset"
+                " after plotting."
+            )
+
+        model = gb.build_model()
+
+        match which:
+            case "vars":
+                subgraph = model.var_parental_subgraph(self)
+                plot_vars(subgraph, **kwargs)
+            case "nodes":
+                self_nodes = [self.value_node, self.dist_node, self.var_value_node]
+                filtered_nodes = [nd for nd in self_nodes if nd is not None]
+                subgraph = model.node_parental_subgraph(*filtered_nodes)
+                plot_nodes(subgraph, **kwargs)
+
+        model.pop_nodes_and_vars()
+
+        vars_dict = {var_.name: var_ for var_ in _vars}
+        nodes_dict = {node.name: node for node in nodes}
+
+        for name in var_names:
+            vars_dict[name].name = ""
+
+        for name in node_names:
+            nodes_dict[name].name = ""
+
+        gb.nodes.clear()
+        gb.vars.clear()
+
+    def plot_vars(
+        self,
+        show: bool = True,
+        save_path: str | None | IO = None,
+        width: int = 14,
+        height: int = 10,
+        prog: Literal[
+            "dot", "circo", "fdp", "neato", "osage", "patchwork", "sfdp", "twopi"
+        ] = "dot",
+        verbose: bool = False,
+    ) -> None:
+        """
+        Plots the variables of the Liesel sub-model that terminates in this variable.
+
+        Wraps :func:`~.viz.plot_vars`.
+
+        Parameters
+        ----------
+        verbose
+            If ``True``, logs a message if unnamed variables or nodes are temporarily \
+            named for plotting.
+        show
+            Whether to show the plot in a new window.
+        save_path
+            Path to save the plot. If not provided, the plot will not be saved.
+        width
+            Width of the plot in inches.
+        height
+            Height of the plot in inches.
+        prog
+            Layout parameter. Available layouts: circo, dot (the default), fdp, neato, \
+            osage, patchwork, sfdp, twopi.
+        verbose
+            If ``True``, the message that will be logged if unnamed nodes are \
+            automatically named for plotting contains a list of the automatically \
+            assigned names.
+
+        See Also
+        --------
+        .Var.plot_vars : Plots the variables of the Liesel sub-model that terminates in
+            this variable.
+        .Var.plot_nodes : Plots the nodes of the Liesel sub-model that terminates in
+            this variable.
+        .Model.plot_vars : Plots the variables of a Liesel model.
+        .Model.plot_nodes : Plots the nodes of a Liesel model.
+        .viz.plot_vars : Plots the variables of a Liesel model.
+        .viz.plot_nodes : Plots the nodes of a Liesel model.
+        """
+        return self._plot(
+            which="vars",
+            verbose=verbose,
+            show=show,
+            save_path=save_path,
+            width=width,
+            height=height,
+            prog=prog,
+        )
+
+    def plot_nodes(
+        self,
+        show: bool = True,
+        save_path: str | None | IO = None,
+        width: int = 14,
+        height: int = 10,
+        prog: Literal[
+            "dot", "circo", "fdp", "neato", "osage", "patchwork", "sfdp", "twopi"
+        ] = "dot",
+        verbose: bool = False,
+    ) -> None:
+        """
+        Plots the nodes of the Liesel sub-model that terminates in this variable.
+
+        Wraps :func:`~.viz.plot_nodes`.
+
+        Parameters
+        ----------
+        verbose
+            If ``True``, logs a message if unnamed variables or nodes are temporarily \
+            named for plotting.
+        show
+            Whether to show the plot in a new window.
+        save_path
+            Path to save the plot. If not provided, the plot will not be saved.
+        width
+            Width of the plot in inches.
+        height
+            Height of the plot in inches.
+        prog
+            Layout parameter. Available layouts: circo, dot (the default), fdp, neato, \
+            osage, patchwork, sfdp, twopi.
+        verbose
+            If ``True``, the message that will be logged if unnamed nodes are \
+            automatically named for plotting contains a list of the automatically \
+            assigned names.
+
+        See Also
+        --------
+        .Var.plot_vars : Plots the variables of the Liesel sub-model that terminates in
+            this variable.
+        .Var.plot_nodes : Plots the nodes of the Liesel sub-model that terminates in
+            this variable.
+        .Model.plot_vars : Plots the variables of a Liesel model.
+        .Model.plot_nodes : Plots the nodes of a Liesel model.
+        .viz.plot_vars : Plots the variables of a Liesel model.
+        .viz.plot_nodes : Plots the nodes of a Liesel model.
+        """
+        return self._plot(
+            which="nodes",
+            verbose=verbose,
+            show=show,
+            save_path=save_path,
+            width=width,
+            height=height,
+            prog=prog,
+        )
+
 
 def _transform_var_with_bijector_instance(var: Var, bijector_inst: jb.Bijector) -> Var:
     if var.dist_node is None:  # type: ignore
@@ -1971,11 +2168,43 @@ def _transform_var_with_bijector_instance(var: Var, bijector_inst: jb.Bijector) 
 
     transformed_dist.per_obs = var.dist_node.per_obs
 
-    transformed_var = Var(
-        bijector_inv.forward(var.value),
-        transformed_dist,
-        name=f"{var.name}_transformed",
-    )
+    if var.weak:
+        try:
+            value_function = var.value_node.function  # type: ignore
+        except AttributeError as e:
+            raise AttributeError(
+                "Trying to transform a weak variable without calculator node."
+            ) from e
+
+        def forward(*args, **kwargs):
+            return bijector_inv.forward(value_function(*args, **kwargs))
+
+        value_inputs = var.value_node.inputs
+        value_kwinputs = var.value_node.kwinputs
+        value_node_needs_seed = var.value_node.needs_seed
+        try:
+            value_node_upadte_on_init = var.value_node.update_on_init  # type: ignore
+        except AttributeError as e:
+            raise e
+
+        transformed_var = Var(
+            Calc(
+                forward,
+                *value_inputs,
+                _name="",
+                _needs_seed=value_node_needs_seed,
+                update_on_init=value_node_upadte_on_init,
+                **value_kwinputs,
+            ),
+            transformed_dist,
+            name=f"{var.name}_transformed",
+        )
+    else:
+        transformed_var = Var(
+            bijector_inv.forward(var.value),
+            transformed_dist,
+            name=f"{var.name}_transformed",
+        )
 
     var.value_node = Calc(bijector_inst.forward, transformed_var)
     return transformed_var
@@ -2026,11 +2255,43 @@ def _transform_var_with_bijector_class(
 
     bijector_inv = dist_node_transformed.init_dist().bijector
 
-    transformed_var = Var(
-        bijector_inv.forward(var.value),
-        dist_node_transformed,
-        name=f"{var.name}_transformed",
-    )
+    if var.weak:
+        try:
+            value_function = var.value_node.function  # type: ignore
+        except AttributeError as e:
+            raise AttributeError(
+                "Trying to transform a weak variable without calculator node."
+            ) from e
+
+        def forward(*args, **kwargs):
+            return bijector_inv.forward(value_function(*args, **kwargs))
+
+        value_inputs = var.value_node.inputs
+        value_kwinputs = var.value_node.kwinputs
+        value_node_needs_seed = var.value_node.needs_seed
+        try:
+            value_node_upadte_on_init = var.value_node.update_on_init  # type: ignore
+        except AttributeError as e:
+            raise e
+
+        transformed_var = Var(
+            Calc(
+                forward,
+                *value_inputs,
+                _name="",
+                _needs_seed=value_node_needs_seed,
+                update_on_init=value_node_upadte_on_init,
+                **value_kwinputs,
+            ),
+            dist_node_transformed,
+            name=f"{var.name}_transformed",
+        )
+    else:
+        transformed_var = Var(
+            bijector_inv.forward(var.value),
+            dist_node_transformed,
+            name=f"{var.name}_transformed",
+        )
 
     def bijector_fn(value, dist_inputs, bijector_inputs):
         bijector = transform_dist(dist_inputs, bijector_inputs).bijector
@@ -2044,10 +2305,17 @@ def _transform_var_with_bijector_class(
 def _transform_var_without_dist_with_bijector_instance(
     var: Var, bijector_inst: jb.Bijector
 ) -> Var:
-    transformed_var = Var(
-        bijector_inst.inverse(var.value),
-        name=f"{var.name}_transformed",
-    )
+    if var.strong:
+        transformed_var = Var(
+            bijector_inst.inverse(var.value),
+            name=f"{var.name}_transformed",
+        )
+    else:
+        transformed_var = Var.new_calc(
+            bijector_inst.inverse,
+            var.value_node,
+            name=f"{var.name}_transformed",
+        )
 
     var.value_node = Calc(bijector_inst.forward, transformed_var)
 
@@ -2084,10 +2352,19 @@ def _transform_var_without_dist_with_bijector_class(
         bijector_inst = bijector_cls(*bjargs, **bjkwargs)
         return bijector_inst(x)
 
-    transformed_var = Var(
-        bijection_inverse(var.value, *args, **kwargs),
-        name=f"{var.name}_transformed",
-    )
+    if var.strong:
+        transformed_var = Var(
+            bijection_inverse(var.value, *args, **kwargs),
+            name=f"{var.name}_transformed",
+        )
+    else:
+        transformed_var = Var.new_calc(
+            bijection_inverse,
+            var.value_node,
+            *args,
+            **kwargs,
+            name=f"{var.name}_transformed",
+        )
 
     var.value_node = Calc(bijection_forward, transformed_var, *args, **kwargs)
 
@@ -2147,13 +2424,13 @@ def obs(value: Any | Calc, distribution: Dist | None = None, name: str = "") -> 
     model:
 
     >>> dist = lsl.Dist(tfd.Normal, loc=0.0, scale=1.0)
-    >>> y = lsl.obs(jnp.array([-0.5, 0.0, 0.5]), dist, name="y")
+    >>> y = lsl.Var.new_obs(jnp.array([-0.5, 0.0, 0.5]), dist, name="y")
     >>> y
     Var(name="y")
 
     Now we build the model graph:
 
-    >>> model = lsl.GraphBuilder().add(y).build_model()
+    >>> model = lsl.Model([y])
 
     The log-likelihood of the model is the sum of the log-probabilities of all observed
     variables. In this case this is only our ``y`` variable:
@@ -2220,7 +2497,7 @@ def param(value: Any | Calc, distribution: Dist | None = None, name: str = "") -
     A variance parameter with an inverse-gamma prior:
 
     >>> prior = lsl.Dist(tfd.InverseGamma, concentration=0.1, scale=0.1)
-    >>> variance = lsl.param(1.0, prior, name="variance")
+    >>> variance = lsl.Var.new_param(1.0, prior, name="variance")
     >>> variance
     Var(name="variance")
 
@@ -2228,13 +2505,13 @@ def param(value: Any | Calc, distribution: Dist | None = None, name: str = "") -
 
     >>> scale = lsl.Calc(jnp.sqrt, variance)
     >>> dist = lsl.Dist(tfd.Normal, loc=0.0, scale=scale)
-    >>> y = lsl.obs(jnp.array([-0.5, 0.0, 0.5]), dist, name="y")
+    >>> y = lsl.Var.new_obs(jnp.array([-0.5, 0.0, 0.5]), dist, name="y")
     >>> y
     Var(name="y")
 
     Now we can build the model graph:
 
-    >>> model = lsl.GraphBuilder().add(y).build_model()
+    >>> model = lsl.Model([y])
 
     The log_prior of the model is the sum of the log-priors of all parameters. In this
     case this is only our ``variance`` parameter:
