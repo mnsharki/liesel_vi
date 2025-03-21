@@ -4,6 +4,7 @@ import tensorflow_probability.substrates.jax.bijectors as tfb
 from tensorflow_probability.substrates import jax as tfp
 import jax.numpy as jnp
 import optax
+import jax
 
 from .interface import LieselInterface
 from .optimizer import Optimizer
@@ -454,24 +455,40 @@ class OptimizerBuilder:
             latent_variables=self.latent_variables
         )
     
+    # def make_log_cholesky_like(self, d: int) -> jnp.ndarray:
+    #     """
+    #     Generate a flattened log-Cholesky parametrization vector.
+
+    #     The output vector has a length of 
+    #     $$ n = d * (d + 1) // 2, $$
+    #     with the diagonal values set to 1.1.
+
+    #     Parameters:
+    #         d (int): The dimension of the distribution.
+
+    #     Returns:
+    #         jnp.ndarray: A flattened vector representing the log-Cholesky parameters.
+    #     """
+    #     n = d * (d + 1) // 2
+    #     arr = jnp.zeros((n,), dtype=jnp.float32)
+    #     offset = 0
+    #     for row in range(d):
+    #         arr = arr.at[offset + row].set(1.1)
+    #         offset += (row + 1)
+    #     return arr
+
     def make_log_cholesky_like(self, d: int) -> jnp.ndarray:
-        """
-        Generate a flattened log-Cholesky parametrization vector.
-
-        The output vector has a length of 
-        $$ n = d * (d + 1) // 2, $$
-        with the diagonal values set to 1.1.
-
-        Parameters:
-            d (int): The dimension of the distribution.
-
-        Returns:
-            jnp.ndarray: A flattened vector representing the log-Cholesky parameters.
-        """
         n = d * (d + 1) // 2
+        # Initialize the array with zeros
         arr = jnp.zeros((n,), dtype=jnp.float32)
-        offset = 0
-        for row in range(d):
+
+        def body_fun(row, arr):
+            # Compute the offset for the current row:
+            # offset = row*(row+1)//2, then set the diagonal element.
+            offset = (row * (row + 1)) // 2
             arr = arr.at[offset + row].set(1.1)
-            offset += (row + 1)
+            return arr
+
+        # Use jax.lax.fori_loop to iterate from 0 to d
+        arr = jax.lax.fori_loop(0, d, body_fun, arr)
         return arr

@@ -3,7 +3,6 @@ import copy
 
 import jax.numpy as jnp
 
-
 class LieselInterface:
     def __init__(self, model):
         self.model = model
@@ -71,8 +70,9 @@ class LieselInterface:
         Returns:
             model: The model with subsetted data.
         """
+        batch_indices = jnp.array(batch_indices)
         for var in model.vars.values():
             if getattr(var, "observed", True):
-                var.value = var.value[batch_indices]
+                var.value = jnp.take(var.value, batch_indices, axis=0)
 
         return model

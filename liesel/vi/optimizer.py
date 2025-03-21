@@ -205,7 +205,7 @@ class Optimizer:
         'step' function is executed to compute the ELBO, its gradients, and update the variational
         parameters. It also implements early stopping based on a patience threshold.
         """
-        @partial(jax.jit, static_argnames=['batch_size', 'S'])
+        @partial(jax.jit, static_argnames=['batch_size', 'S']) #, 'batch_indices'
         def step(current_phi, opt_state, rng_key, dim_data, batch_size, batch_indices, S): 
             """
             Perform a single optimization step.
@@ -266,6 +266,7 @@ class Optimizer:
             
             epoch_elbos = []
             for batch_indices in batch_indices_list:
+                batch_indices = tuple(batch_indices.tolist())
                 phi, opt_state, loss_val, rng_key = step(
                     phi, opt_state, rng_key, dim_data, batch_size, batch_indices, self.S
                     )
@@ -292,6 +293,7 @@ class Optimizer:
         self.opt_state = opt_state
         self.rng_key = rng_key
         self.final_variational_distributions = self.get_final_distributions()
+
 
     def _elbo(self, phi, rng_key, dim_data, batch_size, batch_indices, S):
         """
