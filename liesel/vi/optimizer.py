@@ -5,6 +5,8 @@ import jax.numpy as jnp
 import optax
 from tensorflow_probability.substrates import jax as tfp
 import jax.tree_util
+import sys
+from jax.experimental import host_callback as hcb
 from .interface import LieselInterface
 
 import matplotlib.pyplot as plt
@@ -196,17 +198,124 @@ class Optimizer:
         return opt_state, tx
 
 
+    # def fit(self):
+    #     """
+    #     Run the optimization loop to update variational parameters by maximizing the negative ELBO.
+
+    #     This method iterates over the specified number of epochs. At each epoch, the data is
+    #     partitioned into batches (if a batch_size is provided) and, for each batch, a jitted 
+    #     'step' function is executed to compute the ELBO, its gradients, and update the variational
+    #     parameters. It also implements early stopping based on a patience threshold.
+    #     """
+    #     @partial(jax.jit, static_argnames=['batch_size', 'S']) #, 'batch_indices'
+    #     def step(current_phi, opt_state, rng_key, dim_data, batch_size, batch_indices, S): 
+    #         """
+    #         Perform a single optimization step.
+
+    #         Parameters
+    #         ----------
+    #         current_phi : dict
+    #             Current variational parameters.
+    #         opt_state : object
+    #             Current optimizer state.
+    #         rng_key : jax.random.PRNGKey
+    #             Current JAX random key.
+    #         dim_data : int
+    #             Total number of data points.
+    #         batch_size : int
+    #             Size of the batch.
+    #         batch_indices : array-like
+    #             Indices for the current batch.
+    #         S : int
+    #             Number of samples used in the ELBO estimation.
+
+    #         Returns
+    #         -------
+    #         new_phis : dict
+    #             Updated variational parameters.
+    #         new_opt_state : object
+    #             Updated optimizer state.
+    #         loss_val : float
+    #             Computed loss value (negative ELBO) for the current batch.
+    #         new_rng_key : jax.random.PRNGKey
+    #             Updated random key.
+    #         """
+    #         (loss_val, new_rng_key), grads = jax.value_and_grad(
+    #             lambda p, key: self._elbo(p, key, dim_data, batch_size, batch_indices, S), 
+    #             has_aux=True
+    #         )(current_phi, rng_key)
+
+    #         updates, new_opt_state = self.optimizer.update(grads, opt_state, current_phi)
+    #         new_phis = optax.apply_updates(current_phi, updates)
+    #         return new_phis, new_opt_state, loss_val, new_rng_key
+        
+    #     phi = self.phi
+    #     opt_state = self.opt_state
+    #     rng_key = self.rng_key
+
+    #     best_elbo = -float("inf")
+    #     window_counter = 0
+    #     early_stopping_enabled = (self.patience_tol is not None and self.window_size is not None)
+    #     dim_data = self.dim_data 
+    #     batch_size = self.batch_size
+
+    #     number_batches = dim_data // batch_size if self.batch_size is not None else 1
+
+    #     for epoch in range(self.n_epochs):
+    #         rng_key, perm_key = jax.random.split(rng_key)
+    #         all_indices = jax.random.permutation(perm_key, dim_data)
+    #         batch_indices_list = jnp.array_split(all_indices, number_batches)
+            
+    #         epoch_elbos = []
+    #         for batch_indices in batch_indices_list:
+    #             batch_indices = tuple(batch_indices.tolist())
+    #             phi, opt_state, loss_val, rng_key = step(
+    #                 phi, opt_state, rng_key, dim_data, batch_size, batch_indices, self.S
+    #                 )
+    #             epoch_elbos.append(float(-loss_val))
+
+    #         current_elbo = jnp.mean(jnp.array(epoch_elbos))
+    #         self.elbo_values.append(float(current_elbo))
+
+    #         if (epoch + 1) % 1000 == 0:
+    #             print(f"Epoch {epoch+1}, ELBO: {current_elbo:.4f}")
+
+    #         if early_stopping_enabled: 
+    #             if current_elbo > best_elbo + self.patience_tol:
+    #                 best_elbo = current_elbo
+    #                 window_counter = 0
+    #             else:
+    #                 window_counter += 1
+
+    #             if window_counter >= self.window_size:
+    #                 print(f"Early stopping at epoch {epoch+1} with ELBO {current_elbo:.4f}")
+    #                 break
+
+    #     self.phi = phi
+    #     self.opt_state = opt_state
+    #     self.rng_key = rng_key
+    #     self.final_variational_distributions = self.get_final_distributions()
+
+
     def fit(self):
         """
         Run the optimization loop to update variational parameters by maximizing the negative ELBO.
 
         This method iterates over the specified number of epochs. At each epoch, the data is
-        partitioned into batches (if a batch_size is provided) and, for each batch, a jitted 
-        'step' function is executed to compute the ELBO, its gradients, and update the variational
-        parameters. It also implements early stopping based on a patience threshold.
+        partitioned into batches (if a batch_size is provided) and a jitted 'step' function is
+        executed to compute the ELBO, its gradients, and update the variational parameters.
+        Early stopping is implemented based on the relative improvement of the ELBO.
         """
-        @partial(jax.jit, static_argnames=['batch_size', 'S']) #, 'batch_indices'
-        def step(current_phi, opt_state, rng_key, dim_data, batch_size, batch_indices, S): 
+        n_epochs = self.n_epochs
+        dim_data = self.dim_data
+        batch_size = self.batch_size if self.batch_size is not None else dim_data
+        patience_tol = self.patience_tol if self.patience_tol is not None else 0.0
+        window_size = self.window_size if self.window_size is not None else n_epochs
+        S = self.S
+        number_batches = dim_data // batch_size  # Assume dim_data is divisible by batch_size
+
+        @partial(jax.jit, static_argnames=['batch_size', 'S'])
+        def step(current_phi, opt_state, rng_key, dim_data, batch_size, batch_indices, S):
             """
             Perform a single optimization step.
 
@@ -217,15 +326,15 @@ class Optimizer:
             opt_state : object
                 Current optimizer state.
             rng_key : jax.random.PRNGKey
-                Current JAX random key.
+                Current random key.
             dim_data : int
                 Total number of data points.
             batch_size : int
-                Size of the batch.
+                Size of the current batch.
             batch_indices : array-like
                 Indices for the current batch.
             S : int
-                Number of samples used in the ELBO estimation.
+                Number of Monte Carlo samples.
 
             Returns
             -------
@@ -239,61 +348,146 @@ class Optimizer:
                 Updated random key.
             """
             (loss_val, new_rng_key), grads = jax.value_and_grad(
-                lambda p, key: self._elbo(p, key, dim_data, batch_size, batch_indices, S), 
+                lambda p, key: self._elbo(p, key, dim_data, batch_size, batch_indices, S),
                 has_aux=True
             )(current_phi, rng_key)
-
             updates, new_opt_state = self.optimizer.update(grads, opt_state, current_phi)
             new_phis = optax.apply_updates(current_phi, updates)
             return new_phis, new_opt_state, loss_val, new_rng_key
-        
-        phi = self.phi
-        opt_state = self.opt_state
-        rng_key = self.rng_key
 
-        best_elbo = -float("inf")
-        window_counter = 0
-        early_stopping_enabled = (self.patience_tol is not None and self.window_size is not None)
-        dim_data = self.dim_data 
-        batch_size = self.batch_size
+        def epoch_batches(phi, opt_state, rng_key):
+            """
+            Process all batches in one epoch and compute the mean ELBO.
 
-        number_batches = dim_data // batch_size if self.batch_size is not None else 1
+            Parameters
+            ----------
+            phi : dict
+                Current variational parameters.
+            opt_state : object
+                Current optimizer state.
+            rng_key : jax.random.PRNGKey
+                Current random key.
 
-        for epoch in range(self.n_epochs):
+            Returns
+            -------
+            phi : dict
+                Updated variational parameters.
+            opt_state : object
+                Updated optimizer state.
+            rng_key : jax.random.PRNGKey
+                Updated random key.
+            current_elbo : float
+                Mean ELBO computed over the batches.
+            """
             rng_key, perm_key = jax.random.split(rng_key)
             all_indices = jax.random.permutation(perm_key, dim_data)
-            batch_indices_list = jnp.array_split(all_indices, number_batches)
-            
-            epoch_elbos = []
-            for batch_indices in batch_indices_list:
-                batch_indices = tuple(batch_indices.tolist())
+            epoch_elbos = jnp.zeros((number_batches,))  # Array to store ELBO per batch
+
+            def batch_step(i, state):
+                phi, opt_state, rng_key, epoch_elbos, all_indices = state
+                start = i * batch_size
+                batch_indices = jax.lax.dynamic_slice(all_indices, (start,), (batch_size,))
                 phi, opt_state, loss_val, rng_key = step(
-                    phi, opt_state, rng_key, dim_data, batch_size, batch_indices, self.S
-                    )
-                epoch_elbos.append(float(-loss_val))
+                    phi, opt_state, rng_key, dim_data, batch_size, batch_indices, S
+                )
+                epoch_elbos = epoch_elbos.at[i].set(-loss_val)
+                return phi, opt_state, rng_key, epoch_elbos, all_indices
 
-            current_elbo = jnp.mean(jnp.array(epoch_elbos))
-            self.elbo_values.append(float(current_elbo))
+            phi, opt_state, rng_key, epoch_elbos, _ = jax.lax.fori_loop(
+                0, number_batches, batch_step, (phi, opt_state, rng_key, epoch_elbos, all_indices)
+            )
+            current_elbo = jnp.mean(epoch_elbos)
+            return phi, opt_state, rng_key, current_elbo
 
-            if (epoch + 1) % 1000 == 0:
-                print(f"Epoch {epoch+1}, ELBO: {current_elbo:.4f}")
+        initial_elbo_array = jnp.zeros((n_epochs,))
+        initial_state = (0, self.phi, self.opt_state, self.rng_key, -jnp.inf, 0, initial_elbo_array)
 
-            if early_stopping_enabled: 
-                if current_elbo > best_elbo + self.patience_tol:
-                    best_elbo = current_elbo
-                    window_counter = 0
-                else:
-                    window_counter += 1
+        def print_and_return_zero(fmt, *args):
+            """
+            Print a formatted message and return 0.
 
-                if window_counter >= self.window_size:
-                    print(f"Early stopping at epoch {epoch+1} with ELBO {current_elbo:.4f}")
-                    break
+            Parameters
+            ----------
+            fmt : str
+                Format string.
+            *args :
+                Arguments to be formatted.
+
+            Returns
+            -------
+            int
+                Always returns 0.
+            """
+            jax.debug.print(fmt, *args)
+            return 0
+
+        def epoch_body(state):
+            """
+            Update the epoch state and log progress using relative ELBO improvement.
+
+            Parameters
+            ----------
+            state : tuple
+                Contains (epoch, phi, opt_state, rng_key, best_elbo, window_counter, elbo_array).
+
+            Returns
+            -------
+            tuple
+                Updated state: (epoch+1, phi, opt_state, rng_key, new_best_elbo, new_window_counter, elbo_array).
+            """
+            epoch, phi, opt_state, rng_key, best_elbo, window_counter, elbo_array = state
+            phi, opt_state, rng_key, current_elbo = epoch_batches(phi, opt_state, rng_key)
+            elbo_array = elbo_array.at[epoch].set(current_elbo)
+            epsilon = 1e-8
+            improvement = jnp.where(
+                best_elbo == -jnp.inf,
+                1.0,
+                (current_elbo - best_elbo) / (jnp.abs(best_elbo) + epsilon)
+            )
+
+            new_best_elbo = jax.lax.select(improvement > patience_tol, current_elbo, best_elbo)
+            new_window_counter = jax.lax.select(improvement > patience_tol, 0, window_counter + 1)
+
+            _ = jax.lax.cond(
+                jnp.equal(jnp.mod(epoch + 1, 1000), 0),
+                lambda _: print_and_return_zero("Epoch: {} - ELBO: {} - Relative Improvement: {}", epoch + 1, current_elbo, improvement),
+                lambda _: 0,
+                operand=0
+            )
+
+            _ = jax.lax.cond(
+                new_window_counter >= window_size,
+                lambda _: print_and_return_zero("Early stopping triggered at epoch: {} with ELBO: {} - Relative Improvement: {}", epoch + 1, current_elbo, improvement),
+                lambda _: 0,
+                operand=0
+            )
+            return (epoch + 1, phi, opt_state, rng_key, new_best_elbo, new_window_counter, elbo_array)
+
+        def loop_cond(state):
+            """
+            Loop condition: Continue while epoch < n_epochs and window_counter < window_size.
+
+            Parameters
+            ----------
+            state : tuple
+                Contains (epoch, phi, opt_state, rng_key, best_elbo, window_counter, elbo_array).
+
+            Returns
+            -------
+            bool
+                True if the loop should continue, False otherwise.
+            """
+            epoch, phi, opt_state, rng_key, best_elbo, window_counter, elbo_array = state
+            return (epoch < n_epochs) & (window_counter < window_size)
+
+        final_state = jax.lax.while_loop(loop_cond, epoch_body, initial_state)
+        epoch_count, phi, opt_state, rng_key, best_elbo, window_counter, elbo_array = final_state
 
         self.phi = phi
         self.opt_state = opt_state
         self.rng_key = rng_key
+        self.elbo_values = elbo_array[:epoch_count].tolist()
         self.final_variational_distributions = self.get_final_distributions()
-
 
     def _elbo(self, phi, rng_key, dim_data, batch_size, batch_indices, S):
         """
