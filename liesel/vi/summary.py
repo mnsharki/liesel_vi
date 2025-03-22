@@ -124,7 +124,7 @@ class Summary:
         plt.show()
 
     def plot_density(self, variable: str, title: str = None, style: str = "whitegrid",
-                     xlabel: str = None, save_path: str = None) -> None:
+                    xlabel: str = None, save_path: str = None) -> None:
         """
         Plot the posterior density of a latent variable using pre-generated samples.
 
@@ -145,29 +145,38 @@ class Summary:
             raise ValueError(f"Samples for variable {variable} not provided.")
         samples = self.samples[variable]
         sns.set_theme(style=style)
-        plt.figure(figsize=(8, 6))
+        
         if samples.ndim == 1 or (samples.ndim == 2 and samples.shape[1] == 1):
+            plt.figure(figsize=(8, 6))
             sns.kdeplot(x=samples.ravel(), fill=True)
+            if title is None:
+                title = f"Density Plot for {variable}"
+            if xlabel is None:
+                xlabel = variable
+            plt.title(title)
+            plt.xlabel(xlabel)
+            plt.ylabel("Density")
+            plt.tight_layout()  
+            if save_path:
+                plt.savefig(save_path)
+            plt.show()
+        
         elif samples.ndim == 2:
             num_dims = samples.shape[1]
-            fig, axes = plt.subplots(num_dims, 1, figsize=(8, 4 * num_dims))
-            if num_dims == 1:
-                axes = [axes]
-            for i, ax in enumerate(axes):
+            fig, axes = plt.subplots(num_dims, 1, figsize=(8, 4 * num_dims), squeeze=False)
+            for i, ax in enumerate(axes[:, 0]):
                 sns.kdeplot(x=samples[:, i], fill=True, ax=ax)
                 ax.set_xlabel(f"{variable}[{i}]")
+                ax.set_ylabel("Density")
+            if title is None:
+                title = f"Density Plot for {variable}"
+            fig.suptitle(title) 
+            fig.tight_layout(rect=[0, 0, 1, 0.95])  
+            if save_path:
+                plt.savefig(save_path)
+            plt.show()
         else:
             raise ValueError("Unsupported sample dimensions for density plot.")
-        if title is None:
-            title = f"Density Plot for {variable}"
-        if xlabel is None:
-            xlabel = variable
-        plt.title(title)
-        plt.xlabel(xlabel)
-        plt.ylabel("Density")
-        if save_path:
-            plt.savefig(save_path)
-        plt.show()
 
     def plot_pairwise(self, variable: str, title: str = None, style: str = "whitegrid",
                       save_path: str = None) -> None:
