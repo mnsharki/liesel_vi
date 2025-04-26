@@ -1,20 +1,24 @@
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Callable, Tuple, Type
 import math
 import jax
 import jax.numpy as jnp
 import optax
+from optax import GradientTransformation, OptState 
 from tensorflow_probability.substrates import jax as tfp
+from tensorflow_probability.substrates.jax.distributions import Distribution as TfpDistribution
 import jax.tree_util
 import sys
 from jax.experimental import host_callback as hcb
-from .interface import LieselInterface
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+from functools import partial
+
+from .interface import LieselInterface
 
 tfd = tfp.distributions
 
-from functools import partial
+
 
 
 class Optimizer:
@@ -33,9 +37,9 @@ class Optimizer:
         S: int,
         model_interface: LieselInterface,
         latent_variables: List[Dict],
-        batch_size: Optional[int] = None, 
-        patience_tol: Optional[float] = None, 
-        window_size: Optional[int] = None,  
+        batch_size: Optional[int] = None,
+        patience_tol: Optional[float] = None,
+        window_size: Optional[int] = None,
     ) -> None:
         """
         Initialize the Optimizer.
@@ -61,7 +65,7 @@ class Optimizer:
         """
         self.seed = seed
         self.n_epochs = n_epochs
-        self.patience_tol = patience_tol  
+        self.patience_tol = patience_tol
         self.window_size = window_size
         self.S = S
         self.batch_size = batch_size
@@ -69,7 +73,7 @@ class Optimizer:
         self.latent_vars_config = latent_variables
         self.rng_key = jax.random.PRNGKey(self.seed)
 
-        self._process_full_rank_configs() #new pre processing step
+        self._process_full_rank_configs()  
 
         self.variational_dists_class = self._init_variational_dists_class()
         self.phi = self._init_phi()
@@ -82,22 +86,22 @@ class Optimizer:
 
         try:
             self.dim_data = next(
-                var.value.shape[0] 
-                for var in self.model_interface.model.vars.values() 
+                var.value.shape[0]
+                for var in self.model_interface.model.vars.values()
                 if getattr(var, "observed", True)
             )
         except StopIteration:
             raise ValueError("No observed data found in model.")
 
-    def _init_variational_dists_class(self):
+    def _init_variational_dists_class(self) -> Dict[str, Type[TfpDistribution]]:
         """Initialize variational distribution classes."""
-        variational_dists_class = { 
+        variational_dists_class = {
             self._config_key(config): config["dist_class"]
             for config in self.latent_vars_config
         }
         return variational_dists_class
 
-    def _init_phi(self):
+    def _init_phi(self) -> Dict[str, Any]:
         """Initialize the phi dictionary."""
         phi = {
             self._config_key(config): config["phi"]
@@ -105,35 +109,40 @@ class Optimizer:
         }
         return phi
 
-    def _init_fixed_distribution_params(self):
+    def _init_fixed_distribution_params(self) -> Dict[str, Dict[str, Any]]:
         """Initialize fixed distribution parameters."""
         fixed_distribution_params = {
-            self._config_key(config): config["fixed_distribution_params"] 
-            if config["fixed_distribution_params"] is not None else {}  
+            self._config_key(config): (
+                config["fixed_distribution_params"]
+                if config["fixed_distribution_params"] is not None
+                else {}
+            )
             for config in self.latent_vars_config
         }
         return fixed_distribution_params
 
-    def _init_transform_dict(self):
+    def _init_transform_dict(self) -> Dict[str, GradientTransformation]:
         """Initialize the transform dictionary."""
         optim_dict = {
             self._config_key(config): config["optimizer_chain"]
             for config in self.latent_vars_config
-                }
+        }
         return optim_dict
 
-    def _config_key(self, config):
+    def _config_key(self, config) -> str:
         """Generate a configuration key from variable names."""
-        return config["names"][0] if len(config["names"]) == 1 else config["full_rank_key"]
+        return (
+            config["names"][0] if len(config["names"]) == 1 else config["full_rank_key"]
+        )
 
-    def _build_distribution(self, dist_class, phi, fixed_distribution_params):
+    def _build_distribution(self, dist_class: Type[TfpDistribution], phi: Dict[str, Any], fixed_distribution_params: Dict[str, Any]) -> TfpDistribution:
         """Builds a TFP distribution with given parameters phi and fixed_distribution_params."""
         return dist_class(**phi, **fixed_distribution_params)
-    
-    def _process_full_rank_configs(self):
+
+    def _process_full_rank_configs(self) -> None:
         """
-        Process configurations for Full-Rank latent variables and 
-        checks dimensions for configurations with multiple variables and sets 
+        Process configurations for Full-Rank latent variables and
+        checks dimensions for configurations with multiple variables and sets
         a unique full_rank_key.
         """
         model_params = self.model_interface.get_params()
@@ -145,17 +154,20 @@ class Optimizer:
                 dims = []
                 for pname in names:
                     if pname not in model_params:
-                        raise KeyError(f"Parameter {pname} not found in model parameters")
+                        raise KeyError(
+                            f"Parameter {pname} not found in model parameters"
+                        )
                     dims.append(math.prod(model_params[pname].shape))
 
                 total_dim = sum(dims)
                 phi_conf = config["phi"]
 
                 if phi_conf["loc"].shape[0] != total_dim:
-                    raise ValueError(f"Dimension mismatch for full rank latent variables {names}: "
-                                     f"expected loc dim {total_dim}, got {phi_conf['loc'].shape[0]}"
-                                     )
-                
+                    raise ValueError(
+                        f"Dimension mismatch for full rank latent variables {names}: "
+                        f"expected loc dim {total_dim}, got {phi_conf['loc'].shape[0]}"
+                    )
+
                 expected_len = total_dim * (total_dim + 1) // 2
                 if phi_conf["log_cholesky_parametrization"].shape[0] != expected_len:
                     raise ValueError(
@@ -166,7 +178,7 @@ class Optimizer:
 
                 config["full_rank_key"] = "Full Rank:" + "_".join(names)
 
-    def _validate_and_build_distributions(self):
+    def _validate_and_build_distributions(self) -> Dict[str, TfpDistribution]:
         """Validate matching, consistency and build the variational distributions."""
         phi_keys = set(self.phi.keys())
         fixed_keys = set(self.fixed_distribution_params.keys())
@@ -181,15 +193,16 @@ class Optimizer:
             key: self._build_distribution(
                 self.variational_dists_class[key],
                 self.phi[key],
-                self.fixed_distribution_params[key]
+                self.fixed_distribution_params[key],
             )
             for key in phi_keys
         }
         return distributions
 
-    def _init_optimizer(self):
+    def _init_optimizer(self) -> Tuple[OptState, GradientTransformation]:
         """Initialize the optimizer state and transformation."""
-        def label_fn(params): 
+
+        def label_fn(params):
             return {k: k for k in params if k in self.phi}
 
         optim_dict = self._init_transform_dict()
@@ -197,107 +210,7 @@ class Optimizer:
         opt_state = tx.init(self.phi)
         return opt_state, tx
 
-
-    # def fit(self):
-    #     """
-    #     Run the optimization loop to update variational parameters by maximizing the negative ELBO.
-
-    #     This method iterates over the specified number of epochs. At each epoch, the data is
-    #     partitioned into batches (if a batch_size is provided) and, for each batch, a jitted 
-    #     'step' function is executed to compute the ELBO, its gradients, and update the variational
-    #     parameters. It also implements early stopping based on a patience threshold.
-    #     """
-    #     @partial(jax.jit, static_argnames=['batch_size', 'S']) #, 'batch_indices'
-    #     def step(current_phi, opt_state, rng_key, dim_data, batch_size, batch_indices, S): 
-    #         """
-    #         Perform a single optimization step.
-
-    #         Parameters
-    #         ----------
-    #         current_phi : dict
-    #             Current variational parameters.
-    #         opt_state : object
-    #             Current optimizer state.
-    #         rng_key : jax.random.PRNGKey
-    #             Current JAX random key.
-    #         dim_data : int
-    #             Total number of data points.
-    #         batch_size : int
-    #             Size of the batch.
-    #         batch_indices : array-like
-    #             Indices for the current batch.
-    #         S : int
-    #             Number of samples used in the ELBO estimation.
-
-    #         Returns
-    #         -------
-    #         new_phis : dict
-    #             Updated variational parameters.
-    #         new_opt_state : object
-    #             Updated optimizer state.
-    #         loss_val : float
-    #             Computed loss value (negative ELBO) for the current batch.
-    #         new_rng_key : jax.random.PRNGKey
-    #             Updated random key.
-    #         """
-    #         (loss_val, new_rng_key), grads = jax.value_and_grad(
-    #             lambda p, key: self._elbo(p, key, dim_data, batch_size, batch_indices, S), 
-    #             has_aux=True
-    #         )(current_phi, rng_key)
-
-    #         updates, new_opt_state = self.optimizer.update(grads, opt_state, current_phi)
-    #         new_phis = optax.apply_updates(current_phi, updates)
-    #         return new_phis, new_opt_state, loss_val, new_rng_key
-        
-    #     phi = self.phi
-    #     opt_state = self.opt_state
-    #     rng_key = self.rng_key
-
-    #     best_elbo = -float("inf")
-    #     window_counter = 0
-    #     early_stopping_enabled = (self.patience_tol is not None and self.window_size is not None)
-    #     dim_data = self.dim_data 
-    #     batch_size = self.batch_size
-
-    #     number_batches = dim_data // batch_size if self.batch_size is not None else 1
-
-    #     for epoch in range(self.n_epochs):
-    #         rng_key, perm_key = jax.random.split(rng_key)
-    #         all_indices = jax.random.permutation(perm_key, dim_data)
-    #         batch_indices_list = jnp.array_split(all_indices, number_batches)
-            
-    #         epoch_elbos = []
-    #         for batch_indices in batch_indices_list:
-    #             batch_indices = tuple(batch_indices.tolist())
-    #             phi, opt_state, loss_val, rng_key = step(
-    #                 phi, opt_state, rng_key, dim_data, batch_size, batch_indices, self.S
-    #                 )
-    #             epoch_elbos.append(float(-loss_val))
-
-    #         current_elbo = jnp.mean(jnp.array(epoch_elbos))
-    #         self.elbo_values.append(float(current_elbo))
-
-    #         if (epoch + 1) % 1000 == 0:
-    #             print(f"Epoch {epoch+1}, ELBO: {current_elbo:.4f}")
-
-    #         if early_stopping_enabled: 
-    #             if current_elbo > best_elbo + self.patience_tol:
-    #                 best_elbo = current_elbo
-    #                 window_counter = 0
-    #             else:
-    #                 window_counter += 1
-
-    #             if window_counter >= self.window_size:
-    #                 print(f"Early stopping at epoch {epoch+1} with ELBO {current_elbo:.4f}")
-    #                 break
-
-    #     self.phi = phi
-    #     self.opt_state = opt_state
-    #     self.rng_key = rng_key
-    #     self.final_variational_distributions = self.get_final_distributions()
-
-
-    def fit(self):
+    def fit(self) -> None: 
         """
         Run the optimization loop to update variational parameters by maximizing the negative ELBO.
 
@@ -312,10 +225,19 @@ class Optimizer:
         patience_tol = self.patience_tol if self.patience_tol is not None else 0.0
         window_size = self.window_size if self.window_size is not None else n_epochs
         S = self.S
-        number_batches = dim_data // batch_size  # Assume dim_data is divisible by batch_size
+        number_batches = (
+            dim_data // batch_size
+        )  # Assume dim_data is divisible by batch_size
 
-        @partial(jax.jit, static_argnames=['batch_size', 'S'])
-        def step(current_phi, opt_state, rng_key, dim_data, batch_size, batch_indices, S):
+        @partial(jax.jit, static_argnames=["batch_size", "S"])
+        def step(current_phi: Dict[str, Any],
+                 opt_state: OptState, # Use OptState here
+                 rng_key: jax.random.PRNGKey,
+                 dim_data: int,
+                 batch_size: int,
+                 batch_indices: jnp.ndarray,
+                 S: int
+                 ) -> Tuple[Dict[str, Any], OptState, float, jax.random.PRNGKey]:
             """
             Perform a single optimization step.
 
@@ -348,14 +270,21 @@ class Optimizer:
                 Updated random key.
             """
             (loss_val, new_rng_key), grads = jax.value_and_grad(
-                lambda p, key: self._elbo(p, key, dim_data, batch_size, batch_indices, S),
-                has_aux=True
+                lambda p, key: self._elbo(
+                    p, key, dim_data, batch_size, batch_indices, S
+                ),
+                has_aux=True,
             )(current_phi, rng_key)
-            updates, new_opt_state = self.optimizer.update(grads, opt_state, current_phi)
+            updates, new_opt_state = self.optimizer.update(
+                grads, opt_state, current_phi
+            )
             new_phis = optax.apply_updates(current_phi, updates)
             return new_phis, new_opt_state, loss_val, new_rng_key
 
-        def epoch_batches(phi, opt_state, rng_key):
+        def epoch_batches(phi: Dict[str, Any],
+                          opt_state: OptState, 
+                          rng_key: jax.random.PRNGKey
+                          ) -> Tuple[Dict[str, Any], OptState, jax.random.PRNGKey, float]: 
             """
             Process all batches in one epoch and compute the mean ELBO.
 
@@ -381,12 +310,14 @@ class Optimizer:
             """
             rng_key, perm_key = jax.random.split(rng_key)
             all_indices = jax.random.permutation(perm_key, dim_data)
-            epoch_elbos = jnp.zeros((number_batches,))  # Array to store ELBO per batch
+            epoch_elbos = jnp.zeros((number_batches,))
 
             def batch_step(i, state):
                 phi, opt_state, rng_key, epoch_elbos, all_indices = state
                 start = i * batch_size
-                batch_indices = jax.lax.dynamic_slice(all_indices, (start,), (batch_size,))
+                batch_indices = jax.lax.dynamic_slice(
+                    all_indices, (start,), (batch_size,)
+                )
                 phi, opt_state, loss_val, rng_key = step(
                     phi, opt_state, rng_key, dim_data, batch_size, batch_indices, S
                 )
@@ -394,32 +325,34 @@ class Optimizer:
                 return phi, opt_state, rng_key, epoch_elbos, all_indices
 
             phi, opt_state, rng_key, epoch_elbos, _ = jax.lax.fori_loop(
-                0, number_batches, batch_step, (phi, opt_state, rng_key, epoch_elbos, all_indices)
+                0,
+                number_batches,
+                batch_step,
+                (phi, opt_state, rng_key, epoch_elbos, all_indices),
             )
             current_elbo = jnp.mean(epoch_elbos)
             return phi, opt_state, rng_key, current_elbo
 
         initial_elbo_array = jnp.zeros((n_epochs,))
-        initial_state = (0, self.phi, self.opt_state, self.rng_key, -jnp.inf, 0, initial_elbo_array)
+        initial_state = (
+            0,
+            self.phi,
+            self.opt_state,
+            self.rng_key,
+            -jnp.inf,
+            0,
+            initial_elbo_array,
+        )
 
         def print_and_return_zero(fmt, *args):
             """
             Print a formatted message and return 0.
-
-            Parameters
-            ----------
-            fmt : str
-                Format string.
-            *args :
-                Arguments to be formatted.
-
-            Returns
-            -------
-            int
-                Always returns 0.
             """
-            jax.debug.print(fmt, *args)
-            return 0
+
+            def _print_fn(vals, transforms):
+                print(fmt.format(*vals))
+
+            return hcb.id_tap(_print_fn, args, result=jnp.array(0))
 
         def epoch_body(state):
             """
@@ -435,33 +368,56 @@ class Optimizer:
             tuple
                 Updated state: (epoch+1, phi, opt_state, rng_key, new_best_elbo, new_window_counter, elbo_array).
             """
-            epoch, phi, opt_state, rng_key, best_elbo, window_counter, elbo_array = state
-            phi, opt_state, rng_key, current_elbo = epoch_batches(phi, opt_state, rng_key)
+            epoch, phi, opt_state, rng_key, best_elbo, window_counter, elbo_array = (
+                state
+            )
+            phi, opt_state, rng_key, current_elbo = epoch_batches(
+                phi, opt_state, rng_key
+            )
             elbo_array = elbo_array.at[epoch].set(current_elbo)
             epsilon = 1e-8
             improvement = jnp.where(
                 best_elbo == -jnp.inf,
                 1.0,
-                (current_elbo - best_elbo) / (jnp.abs(best_elbo) + epsilon)
+                (current_elbo - best_elbo) / (jnp.abs(best_elbo) + epsilon),
             )
 
-            new_best_elbo = jax.lax.select(improvement > patience_tol, current_elbo, best_elbo)
-            new_window_counter = jax.lax.select(improvement > patience_tol, 0, window_counter + 1)
+            new_best_elbo = jax.lax.select(
+                improvement > patience_tol, current_elbo, best_elbo
+            )
+            new_window_counter = jax.lax.select(
+                improvement > patience_tol, 0, window_counter + 1
+            )
 
             _ = jax.lax.cond(
                 jnp.equal(jnp.mod(epoch + 1, 1000), 0),
-                lambda _: print_and_return_zero("Epoch: {} - ELBO: {} - Relative Improvement: {}", epoch + 1, current_elbo, improvement),
+                lambda _: print_and_return_zero(
+                    "Epoch: {:6d} - ELBO: {:.4f}", epoch + 1, current_elbo
+                ),
                 lambda _: 0,
-                operand=0
+                operand=0,
             )
 
             _ = jax.lax.cond(
                 new_window_counter >= window_size,
-                lambda _: print_and_return_zero("Early stopping triggered at epoch: {} with ELBO: {} - Relative Improvement: {}", epoch + 1, current_elbo, improvement),
+                lambda _: print_and_return_zero(
+                    "Early stopping triggered at epoch: {:6d} with ELBO: {:.4f} - Relative Improvement: {:.4f}",
+                    epoch + 1,
+                    current_elbo,
+                    -improvement,
+                ),
                 lambda _: 0,
-                operand=0
+                operand=0,
             )
-            return (epoch + 1, phi, opt_state, rng_key, new_best_elbo, new_window_counter, elbo_array)
+            return (
+                epoch + 1,
+                phi,
+                opt_state,
+                rng_key,
+                new_best_elbo,
+                new_window_counter,
+                elbo_array,
+            )
 
         def loop_cond(state):
             """
@@ -477,11 +433,15 @@ class Optimizer:
             bool
                 True if the loop should continue, False otherwise.
             """
-            epoch, phi, opt_state, rng_key, best_elbo, window_counter, elbo_array = state
+            epoch, phi, opt_state, rng_key, best_elbo, window_counter, elbo_array = (
+                state
+            )
             return (epoch < n_epochs) & (window_counter < window_size)
 
         final_state = jax.lax.while_loop(loop_cond, epoch_body, initial_state)
-        epoch_count, phi, opt_state, rng_key, best_elbo, window_counter, elbo_array = final_state
+        epoch_count, phi, opt_state, rng_key, best_elbo, window_counter, elbo_array = (
+            final_state
+        )
 
         self.phi = phi
         self.opt_state = opt_state
@@ -523,13 +483,15 @@ class Optimizer:
         def _single_sample_elbo(rng_key_sample):
             """Compute the ELBO for a single sample by accessing the model via the Interface instance."""
             samples, log_det_jac, log_q = self._sample_variational(phi, rng_key_sample)
-            log_prob = self.model_interface.compute_log_prob(samples, dim_data, batch_size, batch_indices)  
-            return  (log_prob + log_det_jac - log_q) 
+            log_prob = self.model_interface.compute_log_prob(
+                samples, dim_data, batch_size, batch_indices
+            )
+            return log_prob + log_det_jac - log_q
 
         elbo_samples = jax.vmap(_single_sample_elbo)(subkeys)
         elbo = jnp.mean(elbo_samples)
         return -elbo, rng_key
-    
+
     def _apply_transform(self, z, transform_spec):
         """
         Apply a transformation to variable z and compute the log-determinant of its Jacobian.
@@ -552,7 +514,9 @@ class Optimizer:
         elif callable(transform_spec) and not hasattr(transform_spec, "forward"):
             return transform_spec(z)
 
-        elif hasattr(transform_spec, "forward") and hasattr(transform_spec, "forward_log_det_jacobian"):
+        elif hasattr(transform_spec, "forward") and hasattr(
+            transform_spec, "forward_log_det_jacobian"
+        ):
             z_transformed = transform_spec.forward(z)
             event_ndims = 1 if z.ndim == 1 else 0
             ldj = transform_spec.forward_log_det_jacobian(z, event_ndims=event_ndims)
@@ -560,11 +524,13 @@ class Optimizer:
                 ldj = jnp.sum(ldj)
             return z_transformed, ldj
         else:
-            raise ValueError("Only tfb.Bijector instances and Python callables are supported as transforms")
+            raise ValueError(
+                "Only tfb.Bijector instances and Python callables are supported as transforms"
+            )
 
     def _sample_single_variable(self, pname, phi, rng_key, transform_spec):
         """
-        Sample a single latent variable using its fully reparameterizable 
+        Sample a single latent variable using its fully reparameterizable
         variational distribution.
 
         Parameters
@@ -586,27 +552,28 @@ class Optimizer:
             and rng_key is the updated random key.
         """
         pval = phi[pname]
-        
+
         dist_obj = self._build_distribution(
             self.variational_dists_class[pname],
             pval,
-            self.fixed_distribution_params[pname]
+            self.fixed_distribution_params[pname],
         )
 
-        if dist_obj.reparameterization_type == tfd.FULLY_REPARAMETERIZED: #rm
+        if dist_obj.reparameterization_type == tfd.FULLY_REPARAMETERIZED:
             rng_key, subkey = jax.random.split(rng_key)
             z = dist_obj.sample(seed=subkey)
             log_q = dist_obj.log_prob(z)
             z_transformed, ldj = self._apply_transform(z, transform_spec)
         else:
-            raise NotImplementedError("Only fully reparameterized distributions are supported so far.")
-        
-        return z_transformed, ldj, log_q, rng_key
-    
+            raise NotImplementedError(
+                "Only fully reparameterized distributions are supported so far."
+            )
 
-    def _sample_full_rank(self, config, phi, rng_key, name_to_transform): 
+        return z_transformed, ldj, log_q, rng_key
+
+    def _sample_full_rank(self, config, phi, rng_key, name_to_transform):
         """
-        Sample latent variables jointly using a Full-Rank variational distribution a self created 
+        Sample latent variables jointly using a Full-Rank variational distribution a self created
         instance of a TFP distribution: the MultivariateNormalLogCholeskyParametrization.
 
         Parameters
@@ -629,13 +596,13 @@ class Optimizer:
         """
         full_rank_key = config["full_rank_key"]
         pval = phi[full_rank_key]
-        
+
         dist_obj = self._build_distribution(
             self.variational_dists_class[full_rank_key],
             pval,
-            self.fixed_distribution_params[full_rank_key]
+            self.fixed_distribution_params[full_rank_key],
         )
-        
+
         rng_key, subkey = jax.random.split(rng_key)
         z_full_rank = dist_obj.sample(seed=subkey)
         log_q = dist_obj.log_prob(z_full_rank)
@@ -668,7 +635,7 @@ class Optimizer:
             total_ldj += ldj
 
         return samples, total_ldj, log_q, rng_key
-    
+
     def _sample_variational(self, phi, rng_key):
         """
         Sample from the variational distribution for all latent variables.
@@ -683,8 +650,8 @@ class Optimizer:
         Returns
         -------
         tuple
-            (samples, total_ldj, total_log_q) where samples is a dict of all 
-            sampled and transformed latent variables, total_ldj is the cumulative 
+            (samples, total_ldj, total_log_q) where samples is a dict of all
+            sampled and transformed latent variables, total_ldj is the cumulative
             log-determinant, and total_log_q is the sum of log probabilities.
         """
         samples = {}
@@ -707,7 +674,7 @@ class Optimizer:
                 total_ldj += ldj
                 total_log_q += log_q
             else:
-                
+
                 full_samples, ldj, log_q, rng_key = self._sample_full_rank(
                     config, phi, rng_key, name_to_transform
                 )
@@ -716,12 +683,12 @@ class Optimizer:
                 total_log_q += log_q
 
         return samples, total_ldj, total_log_q
-    
-    def get_final_distributions(self): 
+
+    def get_final_distributions(self) -> Dict[str, TfpDistribution]:
         """
-        Construct and return the final variational distributions after applying specified 
-        transformations back into constrained space by applying bijectors. DOes differ 
-        for univariate and multivariate latent variables by key. 
+        Construct and return the final variational distributions after applying specified
+        transformations back into constrained space by applying bijectors. DOes differ
+        for univariate and multivariate latent variables by key.
 
         Returns
         -------
@@ -733,7 +700,9 @@ class Optimizer:
 
         for config in self.latent_vars_config:
             names = config["names"]
-            key = self._config_key(config)  # returns config["names"][0] if univariate, or if multivariate config["full_rank_key"]
+            key = self._config_key(
+                config
+            )  # returns config["names"][0] if univariate, or if multivariate config["full_rank_key"]
             transform = config.get("transform", None)
             dist_class = self.variational_dists_class[key]
             phi_original = self.phi[key]
@@ -741,11 +710,11 @@ class Optimizer:
             phi_transformed = {}
             for param_name, param_value in phi_original.items():
                 if transform is None:
-                    phi_transformed[param_name] = param_value  
+                    phi_transformed[param_name] = param_value
                 elif callable(transform) and not hasattr(transform, "forward"):
-                    phi_transformed[param_name], _ = transform(param_value)  
+                    phi_transformed[param_name], _ = transform(param_value)
                 elif hasattr(transform, "forward"):
-                    phi_transformed[param_name] = transform.forward(param_value)  
+                    phi_transformed[param_name] = transform.forward(param_value)
 
             final_distribution = self._build_distribution(
                 dist_class, phi_transformed, self.fixed_distribution_params[key]
@@ -755,8 +724,8 @@ class Optimizer:
             if len(names) > 1:
                 final_results[key] = final_distribution
         return final_results
-    
-    def get_results(self, n_samples: int = 10_000, seed: jax.random.PRNGKey = jax.random.PRNGKey(0)) -> Dict[str, Any]:
+
+    def get_results(self, n_samples: int = 10_000, seed: int = 42) -> Dict[str, Any]:
         """
         Generate inference results by sampling from the final variational distributions
         consistently, handling both univariate and multivariate latent variables.
@@ -769,7 +738,7 @@ class Optimizer:
         ----------
         n_samples : int
             Number of samples to draw from each variational distribution.
-        seed : jax.random.PRNGKey
+        seed : int
             Random key for sampling.
 
         Returns
@@ -783,19 +752,20 @@ class Optimizer:
         """
         results = {}
         samples = {}
+        seed = jax.random.PRNGKey(seed)
         keys = jax.random.split(seed, len(self.latent_vars_config) + 1)
-        
+
         model_params = self.model_interface.get_params()
-        
+
         for i, config in enumerate(self.latent_vars_config):
             if len(config["names"]) == 1:
                 name = config["names"][0]
                 dist = self.final_variational_distributions[name]
-                samples[name] = dist.sample(n_samples, seed=keys[i+1])
+                samples[name] = dist.sample(n_samples, seed=keys[i + 1])
             else:
                 composite_key = config["full_rank_key"]
                 dist = self.final_variational_distributions[composite_key]
-                composite_sample = dist.sample(n_samples, seed=keys[i+1])
+                composite_sample = dist.sample(n_samples, seed=keys[i + 1])
                 dims = []
                 for var in config["names"]:
                     dims.append(int(jnp.prod(jnp.array(model_params[var].shape))))
@@ -809,9 +779,13 @@ class Optimizer:
                 split_samples = jnp.split(flat_sample, cum_dims, axis=1)
                 for j, var in enumerate(config["names"]):
                     var_shape = model_params[var].shape
-                    samples[var] = jnp.reshape(split_samples[j], (n_samples,) + var_shape)
-        
-        results["final_variational_distributions"] = self.final_variational_distributions
+                    samples[var] = jnp.reshape(
+                        split_samples[j], (n_samples,) + var_shape
+                    )
+
+        results["final_variational_distributions"] = (
+            self.final_variational_distributions
+        )
         results["elbo_values"] = self.elbo_values
         results["samples"] = samples
         results["seed"] = keys[0]

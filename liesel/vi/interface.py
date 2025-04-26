@@ -3,13 +3,16 @@ import copy
 
 import jax.numpy as jnp
 
+
 class LieselInterface:
     def __init__(self, model):
         self.model = model
 
     def get_params(self) -> Dict[str, jnp.ndarray]:
         """Retrieve model parameters as a dictionary."""
-        params = {pname: jnp.array(var.value) for pname, var in self.model.vars.items()}  # allows single int input for params
+        params = {
+            pname: jnp.array(var.value) for pname, var in self.model.vars.items()
+        }  # allows single int input for params
         return params
 
     def compute_log_prob(
@@ -53,7 +56,9 @@ class LieselInterface:
             model_copy.update()
 
             scale = dim_data / batch_size
-            log_likelihood = scale * model_copy.log_lik  # #Kucukelbir: only scaling of likelihood  
+            log_likelihood = (
+                scale * model_copy.log_lik
+            )  # #Kucukelbir: only scaling of likelihood
             log_prior = model_copy.log_prior
             log_prob = log_likelihood + log_prior
 

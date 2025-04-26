@@ -15,11 +15,12 @@ tfd = tfp.distributions
 
 class Phi_MultivariateNormalLogCholeskyParametrization(TypedDict):
     """
-    A TypedDict to specify the parameters for a multivariate normal distribution 
+    A TypedDict to specify the parameters for a multivariate normal distribution
     using a log-Cholesky parametrization.
     """
+
     loc: jnp.ndarray
-    log_cholesky_parametrization: jnp.ndarray 
+    log_cholesky_parametrization: jnp.ndarray
 
 
 class OptimizerBuilder:
@@ -32,7 +33,7 @@ class OptimizerBuilder:
 
     #. Create a builder with :class:`.OptimizerBuilder`.
     #. Optionally set the optimization parameters (e.g., number of epochs, sample size, batch size).
-    #. Create an instance of model interface with :class:`.LieselInterface` 
+    #. Create an instance of model interface with :class:`.LieselInterface`
     #. and set it with :meth:`.set_model`.
     #. Add latent variables with :meth:`.add_latent_variable` and/or :meth:`.add_multivariate_latent_variable`.
     #. Build an :class:`~.optimizer.Optimizer` with :meth:`.build`.
@@ -46,10 +47,10 @@ class OptimizerBuilder:
     Parameters
     ----------
     seed : int
-        Random seed used for reproducibility and for jittering initial values. Based on 
+        Random seed used for reproducibility and for jittering initial values. Based on
         jax.random.PRNGKey, so it should be a non-negative integer.
     n_epochs : int
-        Number of epochs to run the optimization. 
+        Number of epochs to run the optimization.
     S : int
         Number of samples used in the variational estimation.
     patience_tol : float, optional
@@ -76,12 +77,12 @@ class OptimizerBuilder:
     >>> tfd = tfp.distributions
 
     First, we set up a minimal model:
-    
+
     >>> X_m = lsl.obs(X, name="X_m")
     >>> dist_b = lsl.Dist(tfd.Normal, loc=0.0, scale=10.0)
     >>> b = lsl.param(jnp.array([10.0, 10.0, 10.0, 10.0]), dist_b, name="b")
-    >>> def linear_model(X, b): 
-    >>> return X @ b 
+    >>> def linear_model(X, b):
+    >>> return X @ b
 
     >>> mu = lsl.Var(lsl.Calc(linear_model, X=X_m, b=b), name="mu")
 
@@ -101,7 +102,7 @@ class OptimizerBuilder:
     >>> model = gb.build_model()
 
     Initialize builder with desired parameters.
-    >>> builder = OptimizerBuilder(seed=0, n_epochs=10000, batch_size=64, S=32, 
+    >>> builder = OptimizerBuilder(seed=0, n_epochs=10000, batch_size=64, S=32,
     ...                            patience_tol=0.001, window_size=100)
     >>>
     Set up the model interface.
@@ -119,16 +120,16 @@ class OptimizerBuilder:
     ... )
     >>>
     Add a multivariate latent variable using a multivariate normal distribution parametrized by
-    the Cholesky decomposition of the precision matrix as a variational distribution. 
+    the Cholesky decomposition of the precision matrix as a variational distribution.
     >>> builder.add_multivariate_latent_variable(
     ...     ["b", "sigma_sq"],
     ...     phi={
     ...         "loc": jnp.ones(5),
     ...         "log_cholesky_parametrization": jnp.array([
-    ...             0.5, 
+    ...             0.5,
     ...             0.0, 0.5,
-    ...             0.0, 0.0, 0.5, 
-    ...             0.0, 0.0, 0.0, 0.5, 
+    ...             0.0, 0.0, 0.5,
+    ...             0.0, 0.0, 0.0, 0.5,
     ...             0.0, 0.0, 0.5, 0.0, 0.5
     ...         ])
     ...     },
@@ -309,19 +310,18 @@ class OptimizerBuilder:
     >>> optimizer.fit()
     """
 
-
     def __init__(
-            self, 
-            seed: int = 0, 
-            n_epochs: int = 10_000, 
-            S: int = 32,
-            patience_tol: Optional[float] = None, 
-            window_size: Optional[int] = None,
-            batch_size: Optional[int] = None
-            ) -> None:
+        self,
+        seed: int = 0,
+        n_epochs: int = 10_000,
+        S: int = 32,
+        patience_tol: Optional[float] = None,
+        window_size: Optional[int] = None,
+        batch_size: Optional[int] = None,
+    ) -> None:
         self.seed = seed
         self.n_epochs = n_epochs
-        self.patience_tol = patience_tol 
+        self.patience_tol = patience_tol
         self.window_size = window_size
         self.batch_size = batch_size
         self.S = S
@@ -340,15 +340,15 @@ class OptimizerBuilder:
     def add_latent_variable(
         self,
         names: List[str],
-        dist_class: Callable,  
-        *, # enforce keyword-only arguments, leaves us flexibility to not specify arguments for fixed_distribution_params, but leaves it together
+        dist_class: Callable,
+        *,  # enforce keyword-only arguments, leaves us flexibility to not specify arguments for fixed_distribution_params, but leaves it together
         phi: Dict[str, float],
         fixed_distribution_params: Optional[Dict[str, float]] = None,
         optimizer_chain: optax.GradientTransformation,
-        transform: Optional[Union[Callable, tfb.Bijector]] = None
-        ) -> None:
+        transform: Optional[Union[Callable, tfb.Bijector]] = None,
+    ) -> None:
         """
-        Add a latent variable to the optimizer configuration by adding a variational 
+        Add a latent variable to the optimizer configuration by adding a variational
         distribution for each latent variable independently (Mean-Field Approach).
 
         The 'transform' parameter can be:
@@ -374,7 +374,7 @@ class OptimizerBuilder:
             {
                 "names": names,
                 "dist_class": dist_class,
-                "phi": phi,   
+                "phi": phi,
                 "fixed_distribution_params": fixed_distribution_params,
                 "optimizer_chain": optimizer_chain,
                 "transform": transform,
@@ -384,18 +384,18 @@ class OptimizerBuilder:
     def add_multivariate_latent_variable(
         self,
         names: List[str],
-        phi: Optional[Phi_MultivariateNormalLogCholeskyParametrization] = None,  
+        phi: Optional[Phi_MultivariateNormalLogCholeskyParametrization] = None,
         *,
         fixed_distribution_params: Optional[Dict[str, float]] = None,
         optimizer_chain: optax.GradientTransformation,
-        transform: Optional[Union[Callable, tfb.Bijector]] = None
-        ) -> None:
+        transform: Optional[Union[Callable, tfb.Bijector]] = None,
+    ) -> None:
         """
         Adds a multivariate latent variable to the optimizer configuration (Gaussian Full-Rank)
         with shared covariance of different latent variables.
 
         If fixed_distribution_params does not include 'd' (the total dimension),
-        it is computed from the model's parameter shapes. If phi is not provided, 
+        it is computed from the model's parameter shapes. If phi is not provided,
         a default is generated with ones for the location and a computed log-Cholesky vector.
 
         Parameters:
@@ -407,33 +407,33 @@ class OptimizerBuilder:
         """
         if fixed_distribution_params is None:
             fixed_distribution_params = {}
-            
+
         if "d" not in fixed_distribution_params:
             d = sum(
-                jnp.array(self._model_interface.model.vars[var].value).size 
+                jnp.array(self._model_interface.model.vars[var].value).size
                 for var in names
-                )
+            )
             fixed_distribution_params["d"] = d
 
-        d = fixed_distribution_params["d"]  
+        d = fixed_distribution_params["d"]
 
         if phi is None:
             phi = {
-                "loc": jnp.ones(d),  
-                "log_cholesky_parametrization": self.make_log_cholesky_like(d)
+                "loc": jnp.ones(d),
+                "log_cholesky_parametrization": self.make_log_cholesky_like(d),
             }
 
         self.latent_variables.append(
             {
                 "names": names,
-                "dist_class": MultivariateNormalLogCholeskyParametrization, 
-                "phi": phi,   
+                "dist_class": MultivariateNormalLogCholeskyParametrization,
+                "phi": phi,
                 "fixed_distribution_params": fixed_distribution_params,
                 "optimizer_chain": optimizer_chain,
                 "transform": transform,
             }
         )
-        
+
     def build(self) -> Optimizer:
         """
         Build and return an Optimizer instance based on the current configuration.
@@ -442,8 +442,10 @@ class OptimizerBuilder:
             Optimizer: An optimizer configured with the specified model interface and latent variables.
         """
         if self._model_interface is None:
-            raise ValueError("Model interface not set. Call builder.set_model(...) first.")
-  
+            raise ValueError(
+                "Model interface not set. Call builder.set_model(...) first."
+            )
+
         return Optimizer(
             seed=self.seed,
             n_epochs=self.n_epochs,
@@ -452,43 +454,17 @@ class OptimizerBuilder:
             window_size=self.window_size,
             batch_size=self.batch_size,
             model_interface=self._model_interface,
-            latent_variables=self.latent_variables
+            latent_variables=self.latent_variables,
         )
-    
-    # def make_log_cholesky_like(self, d: int) -> jnp.ndarray:
-    #     """
-    #     Generate a flattened log-Cholesky parametrization vector.
-
-    #     The output vector has a length of 
-    #     $$ n = d * (d + 1) // 2, $$
-    #     with the diagonal values set to 1.1.
-
-    #     Parameters:
-    #         d (int): The dimension of the distribution.
-
-    #     Returns:
-    #         jnp.ndarray: A flattened vector representing the log-Cholesky parameters.
-    #     """
-    #     n = d * (d + 1) // 2
-    #     arr = jnp.zeros((n,), dtype=jnp.float32)
-    #     offset = 0
-    #     for row in range(d):
-    #         arr = arr.at[offset + row].set(1.1)
-    #         offset += (row + 1)
-    #     return arr
 
     def make_log_cholesky_like(self, d: int) -> jnp.ndarray:
         n = d * (d + 1) // 2
-        # Initialize the array with zeros
         arr = jnp.zeros((n,), dtype=jnp.float32)
 
         def body_fun(row, arr):
-            # Compute the offset for the current row:
-            # offset = row*(row+1)//2, then set the diagonal element.
             offset = (row * (row + 1)) // 2
             arr = arr.at[offset + row].set(1.1)
             return arr
 
-        # Use jax.lax.fori_loop to iterate from 0 to d
         arr = jax.lax.fori_loop(0, d, body_fun, arr)
         return arr

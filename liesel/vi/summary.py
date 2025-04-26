@@ -15,19 +15,22 @@ class Summary:
 
     This summary object computes key posterior statistics for each latent variable,
     including the posterior mean, variance, 2.5% and 97.5% quantiles, and the highest
-    density interval (HDI) all based on samples from the posterior distributins. Orineted on lsl.goose module. 
+    density interval (HDI) all based on samples from the posterior distributins. Oriented on lsl.goose module.
 
     Parameters
     ----------
     results : dict
         Dictionary containing the inference results with the following keys:
-          - "final_variational_distributions": dict mapping latent variable names to their final 
+          - "final_variational_distributions": dict mapping latent variable names to their final
             variational distribution objects.
           - "elbo_values": list or array of ELBO values over iterations.
           - "samples": dict mapping latent variable names to pre-generated samples.
     """
+
     def __init__(self, results: Dict[str, Any]):
-        self.final_variational_distributions = results["final_variational_distributions"]
+        self.final_variational_distributions = results[
+            "final_variational_distributions"
+        ]
         self.elbo_values = results["elbo_values"]
         self.samples = results["samples"]
 
@@ -66,35 +69,47 @@ class Summary:
             upper = jnp.percentile(samples, 97.5, axis=0)
             if mean.shape == ():
                 hdi_interval = az.hdi(samples_np, hdi_prob=hdi_prob)
-                rows.append({
-                    "variable": var,
-                    "mean": float(mean),
-                    "variance": float(variance),
-                    "2.5%": float(lower),
-                    "97.5%": float(upper),
-                    "hdi_low": float(hdi_interval[0]),
-                    "hdi_high": float(hdi_interval[1])
-                })
+                rows.append(
+                    {
+                        "variable": var,
+                        "mean": float(mean),
+                        "variance": float(variance),
+                        "2.5%": float(lower),
+                        "97.5%": float(upper),
+                        "hdi_low": float(hdi_interval[0]),
+                        "hdi_high": float(hdi_interval[1]),
+                    }
+                )
             elif mean.ndim == 1:
                 for idx in range(mean.shape[0]):
                     hdi_interval = az.hdi(samples_np[:, idx], hdi_prob=hdi_prob)
-                    rows.append({
-                        "variable": f"{var}[{idx}]",
-                        "mean": float(mean[idx]),
-                        "variance": float(variance[idx]),
-                        "2.5%": float(lower[idx]),
-                        "97.5%": float(upper[idx]),
-                        "hdi_low": float(hdi_interval[0]),
-                        "hdi_high": float(hdi_interval[1])
-                    })
+                    rows.append(
+                        {
+                            "variable": f"{var}[{idx}]",
+                            "mean": float(mean[idx]),
+                            "variance": float(variance[idx]),
+                            "2.5%": float(lower[idx]),
+                            "97.5%": float(upper[idx]),
+                            "hdi_low": float(hdi_interval[0]),
+                            "hdi_high": float(hdi_interval[1]),
+                        }
+                    )
             else:
-                raise ValueError("compute_posterior_summary only supports scalar or 1D latent variables.")
+                raise ValueError(
+                    "compute_posterior_summary only supports scalar or 1D latent variables."
+                )
         df = pd.DataFrame(rows)
         return df
 
-    def plot_elbo(self, title: str = "ELBO Progress", xlabel: str = "Iterations", 
-                  ylabel: str = "ELBO", style: str = "whitegrid", color: str = "blue", 
-                  save_path: str = None) -> None:
+    def plot_elbo(
+        self,
+        title: str = "ELBO Progress",
+        xlabel: str = "Iterations",
+        ylabel: str = "ELBO",
+        style: str = "whitegrid",
+        color: str = "blue",
+        save_path: str = None,
+    ) -> None:
         """
         Plot the ELBO progression over iterations.
 
@@ -123,8 +138,14 @@ class Summary:
             plt.savefig(save_path)
         plt.show()
 
-    def plot_density(self, variable: str, title: str = None, style: str = "whitegrid",
-                    xlabel: str = None, save_path: str = None) -> None:
+    def plot_density(
+        self,
+        variable: str,
+        title: str = None,
+        style: str = "whitegrid",
+        xlabel: str = None,
+        save_path: str = None,
+    ) -> None:
         """
         Plot the posterior density of a latent variable using pre-generated samples.
 
@@ -145,7 +166,7 @@ class Summary:
             raise ValueError(f"Samples for variable {variable} not provided.")
         samples = self.samples[variable]
         sns.set_theme(style=style)
-        
+
         if samples.ndim == 1 or (samples.ndim == 2 and samples.shape[1] == 1):
             plt.figure(figsize=(8, 6))
             sns.kdeplot(x=samples.ravel(), fill=True)
@@ -156,30 +177,37 @@ class Summary:
             plt.title(title)
             plt.xlabel(xlabel)
             plt.ylabel("Density")
-            plt.tight_layout()  
+            plt.tight_layout()
             if save_path:
                 plt.savefig(save_path)
             plt.show()
-        
+
         elif samples.ndim == 2:
             num_dims = samples.shape[1]
-            fig, axes = plt.subplots(num_dims, 1, figsize=(8, 4 * num_dims), squeeze=False)
+            fig, axes = plt.subplots(
+                num_dims, 1, figsize=(8, 4 * num_dims), squeeze=False
+            )
             for i, ax in enumerate(axes[:, 0]):
                 sns.kdeplot(x=samples[:, i], fill=True, ax=ax)
                 ax.set_xlabel(f"{variable}[{i}]")
                 ax.set_ylabel("Density")
             if title is None:
                 title = f"Density Plot for {variable}"
-            fig.suptitle(title) 
-            fig.tight_layout(rect=[0, 0, 1, 0.95])  
+            fig.suptitle(title)
+            fig.tight_layout(rect=[0, 0, 1, 0.95])
             if save_path:
                 plt.savefig(save_path)
             plt.show()
         else:
             raise ValueError("Unsupported sample dimensions for density plot.")
 
-    def plot_pairwise(self, variable: str, title: str = None, style: str = "whitegrid",
-                      save_path: str = None) -> None:
+    def plot_pairwise(
+        self,
+        variable: str,
+        title: str = None,
+        style: str = "whitegrid",
+        save_path: str = None,
+    ) -> None:
         """
         Produce a pairwise scatter plot matrix for a multivariate latent variable.
 
@@ -201,7 +229,9 @@ class Summary:
             print("Pairwise plot is not applicable for univariate distributions.")
             return
         elif samples.ndim == 2:
-            df = pd.DataFrame(samples, columns=[f"{variable}_{i}" for i in range(samples.shape[1])])
+            df = pd.DataFrame(
+                samples, columns=[f"{variable}_{i}" for i in range(samples.shape[1])]
+            )
             sns.set_theme(style=style)
             g = sns.pairplot(df)
             if title is not None:
