@@ -9,9 +9,6 @@ from tensorflow_probability.substrates.jax.distributions import Distribution as 
 import jax.tree_util
 import sys
 from jax.experimental import host_callback as hcb
-
-import matplotlib.pyplot as plt
-import seaborn as sns
 from functools import partial
 
 from .interface import LieselInterface
